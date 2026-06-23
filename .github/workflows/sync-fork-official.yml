@@ -14,7 +14,7 @@ jobs:
     if: ${{ github.event.repository.fork == true }}
     steps:
       - name: 调用GitHub官方merge-upstream接口（等同于网页Sync fork）
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const repoFull = context.repo.owner + "/" + context.repo.repo;
