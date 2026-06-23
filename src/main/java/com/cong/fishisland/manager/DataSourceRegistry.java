@@ -35,12 +35,18 @@ public class DataSourceRegistry {
     private final ZhiBo8DataSource zhiBo8DataSource;
     private final TieBaDataSource tieBaDataSource;
     private final QQMusicDataSource qqMusicDataSource;
+    private final LinuxDoDataSource linuxDoDataSource;
+    private final V2exDataSource v2exDataSource;
+    private final JueJinBoilingDataSource jueJinBoilingDataSource;
+    private final NgaDataSource ngaDataSource;
+    private final NgaQingFengDataSource ngaQingFengDataSource;
 
 
     @PostConstruct
     public void doInit() {
         typeDataSourceMap = new HashMap<String, DataSource>() {{
             put(HotDataKeyEnum.ZHI_HU.getValue(), zhiHuDataSource);
+            put(HotDataKeyEnum.JUE_JIN_HOT.getValue(), jueJinBoilingDataSource);
             put(HotDataKeyEnum.WEI_BO.getValue(), weiBoDataSource);
             put(HotDataKeyEnum.CODE_FATHER.getValue(), codeFatherDataSource);
             put(HotDataKeyEnum.BILI_BILI.getValue(), bilibiliDataSource);
@@ -53,6 +59,10 @@ public class DataSourceRegistry {
             put(HotDataKeyEnum.ZHI_BO_8.getValue(), zhiBo8DataSource);
             put(HotDataKeyEnum.TIE_BA.getValue(), tieBaDataSource);
             put(HotDataKeyEnum.QQ_MUSIC.getValue(), qqMusicDataSource);
+            put(HotDataKeyEnum.NGA.getValue(), ngaDataSource);
+            put(HotDataKeyEnum.NGA_QING_FENG.getValue(), ngaQingFengDataSource);
+//            put(HotDataKeyEnum.LINUX_DO.getValue(), linuxDoDataSource);
+//            put(HotDataKeyEnum.V2EX.getValue(), v2exDataSource);
         }};
     }
 

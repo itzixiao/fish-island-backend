@@ -6,9 +6,8 @@
 
 
 <p align="center">
-  <a href="https://github.com/lhccong/fish-island-backend"><img src="https://api.oss.cqbo.com/moyu/moyu.png" width="300" height="250" alt="摸鱼岛 logo"></a>
+  <a href="https://github.com/lhccong/fish-island-backend"><img src="./doc/img/moyu.png" width="300" height="300" alt="摸鱼岛 logo"></a>
 </p>
-
 
 
 
@@ -43,7 +42,6 @@ _✨ 开源🌟一站式摸鱼网 ✨_
 >
 > 在线体验地址🔗
 >
-> 最新版（域名 2025.09 过期）：https://fish.codebug.icu/
 > 稳定版：https://yucoder.cn/
 >
 > 后端地址🌈：https://github.com/lhccong/fish-island-backend
@@ -102,6 +100,11 @@ _✨ 开源🌟一站式摸鱼网 ✨_
     + [✅] 修改网站图标
     + [✅] 网站标题闪烁消息提醒
     + [✅] 摸鱼初始页
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=lhccong/fish-island-backend&type=Date)](https://www.star-history.com/#lhccong/fish-island-backend&Date)
+
 
 ## 截图展示
 

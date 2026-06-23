@@ -1,4 +1,4 @@
-# 数据库初始化
+#数据库初始化
 # @author <a href="https://github.com/lhccong">程序员聪</a>
 #
 
@@ -46,6 +46,9 @@ create table if not exists user_title
     updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
     isDelete   tinyint  default 0                 not null comment '是否删除'
 ) comment '用户称号' collate = utf8mb4_unicode_ci;
+ALTER TABLE `user_title`
+    ADD COLUMN `titleImg` VARCHAR(256) NULL COMMENT '称号图标' after titleId;
+
 
 -- 头像框表
 create table if not exists avatar_frame
@@ -78,6 +81,9 @@ create table if not exists tags
     id         bigint auto_increment comment '标签id' primary key,
     tagsName   varchar(256)                       null comment '标签名',
     type       tinyint  default 0                 null comment '类型（0 官方创建，1 用户自定义）',
+    icon       varchar(256)                       null comment '图标',
+    color      varchar(20)                        null comment '颜色',
+    sort       int      default 0                 not null comment '排序',
     createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
     updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
     isDelete   tinyint  default 0                 not null comment '是否删除',
@@ -133,6 +139,9 @@ create table if not exists post
     index idx_userId (userId),
     index idx_featured (isFeatured)
 ) comment '帖子表' collate = utf8mb4_unicode_ci;
+-- 修改帖子表，新增总结字段
+ALTER TABLE post
+    ADD COLUMN summary TEXT NULL COMMENT '总结';
 
 -- 帖子点赞表（硬删除）
 create table if not exists post_thumb
@@ -186,6 +195,54 @@ create table if not exists todo
     updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
     isDelete   tinyint  default 0                 not null comment '是否删除'
 ) comment '待办表' collate = utf8mb4_unicode_ci;
+
+-- 基金持仓表
+create table if not exists fund
+(
+    id         bigint auto_increment comment 'id' primary key,
+    userId     bigint                             not null comment '用户 id',
+    fundJson   mediumtext                         null comment '基金持仓数据（json数组，包含code、name、shares、cost等字段）',
+    createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete   tinyint  default 0                 not null comment '是否删除',
+    index idx_userId (userId)
+) comment '基金持仓表' collate = utf8mb4_unicode_ci;
+
+-- 指数交易记录表
+create table if not exists index_trade_record(
+    id                 bigint(20)     NOT NULL AUTO_INCREMENT COMMENT '主键',
+    userId             bigint(20)     NOT NULL COMMENT '用户ID，关联user表',
+    indexCode          varchar(32)    not null comment '指数代码（如：sh000001-上证指数，sz399001-深证成指）',
+    tradeType          tinyint(4)     NOT NULL COMMENT '交易类型：1-买入，2-卖出',
+    amount             bigint         not null comment '交易金额（积分）',
+    nav                decimal(10, 4) NOT NULL COMMENT '成交时的指数净值',
+    shares             decimal(20, 8) NOT NULL COMMENT '成交份额',
+    status             tinyint(4)     NOT NULL DEFAULT 1 COMMENT '状态：1-已完成（买入立即完成，卖出T+1结算）',
+    expectedSettleDate date           DEFAULT NULL COMMENT '已废弃：预计结算日期',
+    actualSettleTime   datetime       DEFAULT NULL COMMENT '实际结算完成时间（卖出时记录）',
+    profitLoss         bigint         DEFAULT NULL COMMENT '仅卖出有效：盈亏金额（积分）',
+    createTime         datetime       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下单时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_userId` (`userId`),
+    KEY `idx_user_index_create` (`userId`, `indexCode`, `createTime`),
+    KEY `idx_index_code` (`indexCode`)
+) COMMENT ='指数交易记录表';
+
+-- 指数持仓表
+create table if not exists index_position(
+    id              bigint auto_increment primary key,
+    userId          bigint(20)     NOT NULL COMMENT '用户ID，关联user表',
+    indexCode       varchar(32)    not null comment '指数代码（如：sh000001-上证指数，sz399001-深证成指）',
+    totalShares     decimal(20, 8) not null default 0 comment '总份额（= availableShares + lockedShares）',
+    availableShares decimal(20, 8) not null default 0 comment '可用份额（可卖出）',
+    lockedShares    decimal(20, 8) not null default 0 comment '锁定份额（当日买入，次日09:30解锁）',
+    avgCost         decimal(12, 6) not null default 0 comment '平均成本（净值）',
+    createTime      datetime       default current_timestamp comment '创建时间',
+    updateTime      datetime       default current_timestamp on update current_timestamp comment '更新时间',
+    unique key uk_user_index (userId, indexCode),
+    KEY `idx_index_code` (`indexCode`),
+    KEY `idx_locked_shares` (`lockedShares`)
+) comment '指数持仓表';
 
 -- 房间消息表
 create table if not exists room_message
@@ -263,6 +320,7 @@ CREATE TABLE if not exists `donation_records`
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT ='用户打赏记录表';
 
+-- 英雄表
 CREATE TABLE IF NOT EXISTS hero
 (
     id            BIGINT AUTO_INCREMENT COMMENT '主键ID' PRIMARY KEY,
@@ -289,6 +347,7 @@ CREATE TABLE IF NOT EXISTS hero
     INDEX idx_type (primaryType)
 ) COMMENT '王者荣耀英雄详情表' COLLATE = utf8mb4_unicode_ci;
 
+-- 邮箱封禁表
 create table if not exists `email_ban`
 (
     id          BIGINT(20)                             NOT NULL AUTO_INCREMENT COMMENT '主键ID' PRIMARY KEY,
@@ -300,3 +359,192 @@ create table if not exists `email_ban`
 ) comment '邮箱封禁表' collate = utf8mb4_unicode_ci;
 ALTER TABLE `email_ban`
     ADD COLUMN `bannedIp` VARCHAR(45) NULL COMMENT '封禁的 IP 地址' after emailSuffix;
+
+-- 事件提醒表
+create table if not exists event_remind
+(
+    id            bigint auto_increment comment 'id' primary key,
+    action        varchar(50)                        not null comment '动作类型：like-点赞、at-@提及、reply-回复、comment-评论、follow-关注、share-分享',
+    sourceId      bigint                             not null comment '事件源 ID，如帖子ID、评论ID 等',
+    sourceType    int                                null comment '事件源类型：1- 帖子、2- 评论等',
+    sourceContent varchar(256)                       not null comment '事件源的内容，比如回复的内容，回复的评论等等',
+    url           varchar(256)                       not null comment '事件所发生的地点链接 url',
+    state         int      default 0                 not null comment '是否已读',
+    senderId      bigint                             not null comment '操作者的 ID，即谁关注了你，谁艾特了你',
+    recipientId   bigint                             not null comment '接受通知的用户的 ID',
+    remindTime    datetime                           not null comment '提醒的时间',
+    createTime    datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime    datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete      tinyint  default 0                 not null comment '是否删除（逻辑删除）',
+    index idx_userId (recipientId)
+) comment '事件提醒表' collate = utf8mb4_unicode_ci;
+
+-- 用户会员表
+CREATE TABLE if not exists `user_vip`
+(
+    `id`         BIGINT AUTO_INCREMENT COMMENT '会员ID',
+    `userId`     BIGINT COMMENT '用户ID',
+    `cardNo`     VARCHAR(256) NULL COMMENT '会员兑换卡号（永久会员无卡号）',
+    `type`       tinyint               default 1 not null comment '1-月卡会员 2-永久会员',
+    `validDays`  DATETIME              default null comment '会员到期时间，永久会员为null',
+    `isDelete`   tinyint               default 0 not null comment '是否删除',
+    `createTime` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updateTime` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    -- 索引
+    INDEX `idx_donor` (`userId`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci COMMENT ='用户会员表';
+
+-- 词库表
+create table if not exists word_library
+(
+    id         BIGINT AUTO_INCREMENT COMMENT '词库ID' primary key,
+    word       VARCHAR(100)                       NOT NULL COMMENT '词语名称',
+    category   VARCHAR(50)                        NOT NULL COMMENT '词库分类: undercover-谁是卧底, draw-default-你画我猜默认, draw-hero-你画我猜王者荣耀, draw-idiom-你画我猜成语',
+    wordType   VARCHAR(50) COMMENT '词语类型（如：水果、动物、王者英雄、成语等）',
+    createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间'
+) COMMENT '词库表' collate = utf8mb4_unicode_ci;
+
+
+-- 道具表
+create table if not exists props
+(
+    frameId     BIGINT auto_increment comment '道具 ID' PRIMARY KEY,
+    imgUrl      VARCHAR(256) comment '道具图片地址',
+    type        VARCHAR(256) comment '道具类型 1-摸鱼会员月卡 2-摸鱼称号 ',
+    description VARCHAR(256) comment '道具描述',
+    name        VARCHAR(256) comment '道具名称',
+    points      INT      DEFAULT 1 comment '道具所需兑换积分',
+    createTime  datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime  datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete    tinyint  default 0                 not null comment '是否删除'
+) comment '道具表' collate = utf8mb4_unicode_ci;
+
+
+create table if not exists fish_pet
+(
+    petId      BIGINT auto_increment comment '宠物 ID' PRIMARY KEY,
+    petUrl     VARCHAR(256) comment '宠物图片地址',
+    name       VARCHAR(256) comment '宠物名称',
+    userId     BIGINT comment '用户 ID',
+    level      INT      default 1 comment '宠物等级',
+    exp        INT      default 0 comment '当前经验值',
+    mood       INT      default 100 comment '宠物心情值（0-100）',
+    hunger     INT      default 0 comment '积饿度（越高越饿，建议范围 0-100）',
+    extendData VARCHAR(1024) comment '宠物扩展数据（技能、形象等，JSON 格式）',
+    createTime DATETIME default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime DATETIME default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete   TINYINT  default 0                 not null comment '是否删除'
+) comment '摸鱼宠物表' collate = utf8mb4_unicode_ci;
+
+-- 宠物皮肤表
+create table if not exists pet_skin
+(
+    skinId      BIGINT auto_increment comment '皮肤 ID' PRIMARY KEY,
+    url         VARCHAR(256) comment '皮肤地址',
+    description VARCHAR(256) comment '皮肤描述',
+    name        VARCHAR(256) comment '皮肤名称',
+    points      INT      DEFAULT 1 comment '皮肤所需兑换积分',
+    createTime  datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime  datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete    tinyint  default 0                 not null comment '是否删除'
+) comment '宠物皮肤表' collate = utf8mb4_unicode_ci;
+
+
+-- 1. 物品模板（通用）
+-- auto-generated definition
+create table item_templates
+(
+    id          bigint auto_increment comment '主键ID' primary key,
+    code        varchar(64)                           null comment '模板唯一码，例如 sword_iron_01',
+    name        varchar(100)                          null comment '物品名称',
+    category    varchar(50) default 'equipment'       not null comment '物品大类：equipment-装备类（能穿戴的）、consumable-消耗品（药水/卷轴/食物）、material-材料（强化石/合成材料）',
+    sub_type    varchar(50)                           null comment '物品子类型，例如 weapon 武器、head 头盔、foot 鞋子、hand 手套',
+    equip_slot  varchar(50)                           null comment '可穿戴槽位: head-头部, hand-手部, foot-脚部, weapon-武器；NULL 表示无法穿戴',
+    rarity      tinyint     default 1                 not null comment '稀有度等级（1-8，数字越高越稀有）',
+    levelReq    int         default 1                 null comment '使用等级需求',
+    baseAttack  int         default 0                 null comment '基础攻击力',
+    baseDefense int         default 0                 null comment '基础防御力',
+    baseHp      int         default 0                 null comment '基础生命值',
+    mainAttr    varchar(512)                          null comment '非常规属性/词缀(JSON)，格式: [{k,v},...]',
+    icon        varchar(255)                          null comment '物品图标地址',
+    description text                                  null comment '物品描述',
+    stackable   tinyint(1)  default 0                 null comment '是否可叠加，0-不可叠加，1-可叠加（如消耗品）',
+    removePoint int         default 10                null comment '分解后获得的积分',
+    createTime  datetime    default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime  datetime    default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete    tinyint     default 0                 not null comment '是否删除，0-正常，1-已删除',
+    constraint code unique (code)
+) comment '物品模板表（通用配置，包括装备、消耗品、材料等）';
+
+create index category on item_templates (category) comment '物品大类索引';
+
+create index equip_slot on item_templates (equip_slot) comment '装备槽位索引';
+
+create index rarity on item_templates (rarity) comment '稀有度索引';
+
+
+-- 2. 物品实例（玩家真正持有的物品）
+CREATE TABLE item_instances
+(
+    id           BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+    templateId   BIGINT                               NOT NULL COMMENT '物品模板ID（关联 item_templates.id）',
+    ownerUserId  BIGINT                               NOT NULL COMMENT '持有者用户ID',
+    quantity     INT        DEFAULT 1 COMMENT '物品数量：若模板可叠加则 quantity>1，否则为1',
+    bound        TINYINT(1) DEFAULT 1 COMMENT '是否绑定（1-绑定后不可交易，0-未绑定可交易）',
+    durability   INT        DEFAULT NULL COMMENT '耐久度（可选，部分装备适用）',
+    enhanceLevel INT        DEFAULT 0 COMMENT '强化等级',
+    extraData    JSON COMMENT '扩展信息（如附魔、镶嵌孔、特殊属性等JSON数据）',
+    createTime   datetime   default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime   datetime   default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete     tinyint    default 0                 not null comment '是否删除，0-正常，1-已删除',
+    CONSTRAINT fk_item_instances_template FOREIGN KEY (templateId) REFERENCES item_templates (id),
+    INDEX idx_owner_user_id (ownerUserId) COMMENT '持有者用户索引',
+    INDEX idx_template_id (templateId) COMMENT '物品模板索引'
+) COMMENT ='物品实例表（玩家真正持有的物品，每个实例可有强化、耐久、附魔等个性化信息）';
+
+-- Boss表
+create table if not exists boss
+(
+    id                  bigint auto_increment comment 'Boss ID' primary key,
+    name                varchar(100)                            not null comment 'Boss名称',
+    avatar              varchar(512)                            null comment 'Boss头像URL',
+    health              int           default 1000              not null comment 'Boss血量',
+    attack              int           default 100               not null comment 'Boss攻击力',
+    rewardPoints        int           default 100               not null comment '击败奖励积分',
+    critRate            decimal(5, 4) default 0.0000            null comment '暴击率(0-1)',
+    comboRate           decimal(5, 4) default 0.0000            null comment '连击率(0-1)',
+    dodgeRate           decimal(5, 4) default 0.0000            null comment '闪避率(0-1)',
+    blockRate           decimal(5, 4) default 0.0000            null comment '格挡率(0-1)',
+    lifesteal           decimal(5, 4) default 0.0000            null comment '吸血率(0-1)',
+    critResistance      decimal(5, 4) default 0.0000            null comment '抗暴击率(0-1)',
+    comboResistance     decimal(5, 4) default 0.0000            null comment '抗连击率(0-1)',
+    dodgeResistance     decimal(5, 4) default 0.0000            null comment '抗闪避率(0-1)',
+    blockResistance     decimal(5, 4) default 0.0000            null comment '抗格挡率(0-1)',
+    lifestealResistance decimal(5, 4) default 0.0000            null comment '抗吸血率(0-1)',
+    sort                int           default 0                 not null comment '排序',
+    status              tinyint       default 1                 not null comment '状态：0-禁用，1-启用',
+    createTime          datetime      default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime          datetime      default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete            tinyint       default 0                 not null comment '是否删除',
+    index idx_status (status),
+    index idx_sort (sort)
+) comment 'Boss表' collate = utf8mb4_unicode_ci;
+
+
+-- 聊天记录备份表
+create table if not exists room_message_backup
+(
+    id          bigint comment '原始消息id' primary key,
+    userId      bigint                             not null comment '用户 id',
+    messageId   varchar(128)                       null comment '消息唯一标识',
+    roomId      bigint                             not null comment '房间 id',
+    messageJson mediumtext                         null comment '消息 Json 数据（json）',
+    createTime  datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime  datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete    tinyint  default 0                 not null comment '是否删除',
+    backupTime  datetime default CURRENT_TIMESTAMP not null comment '备份时间'
+) comment '聊天记录备份表' collate = utf8mb4_unicode_ci;

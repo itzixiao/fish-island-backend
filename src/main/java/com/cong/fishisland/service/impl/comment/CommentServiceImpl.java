@@ -67,19 +67,18 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
         int size = commentQueryRequest.getPageSize();
         String sortField = commentQueryRequest.getSortField();
         String sortOrder = commentQueryRequest.getSortOrder();
-        // 获取评论总数
-        long totalComments = this.count(new LambdaQueryWrapper<Comment>()
-                .eq(Comment::getPostId, postId)
-        );
+
         // 分页查询顶级评论
         Page<Comment> topPage = new Page<>(current, size);
         QueryWrapper<Comment> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("postId", postId);
         queryWrapper.isNull("parentId");
         queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC), sortField);
-        List<Comment> topComments = this.page(topPage, queryWrapper).getRecords();
+        Page<Comment> page = this.page(topPage, queryWrapper);
+
+        List<Comment> topComments = page.getRecords();
         if (CollUtil.isEmpty(topComments)) {
-            return new Page<>(current, size, totalComments);
+            return new Page<>(current, size, 0);
         }
         // 收集所有需要查询的用户ID
         Set<Long> userIds = new HashSet<>();
@@ -118,7 +117,7 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
 
             // 获取二级评论总数
             node.setChildCount((int) this.count(new LambdaQueryWrapper<Comment>()
-                    .eq(Comment::getParentId, top.getId())
+                    .eq(Comment::getRootId, top.getId())
             ));
 
             // 填充二级评论用户信息
@@ -138,11 +137,13 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
             node.setHasThumb(hasCommentThumb(top.getId()));
             return node;
         }).collect(Collectors.toList());
+
         Page<CommentNodeVO> pageResult = new Page<>();
+
         if (CollUtil.isNotEmpty(nodes)) {
             pageResult.setCurrent(current);
             pageResult.setSize(size);
-            pageResult.setTotal(totalComments);
+            pageResult.setTotal(page.getTotal());
             pageResult.setRecords(nodes);
         }
         return pageResult;
@@ -211,7 +212,19 @@ public class CommentServiceImpl extends ServiceImpl<CommentMapper, Comment>
                 .orderByDesc(Comment::getCreateTime)
                 .last("LIMIT 1")
         );
-         return comment == null ? null : safeGetCommentVO(comment);
+        return comment == null ? null : safeGetCommentVO(comment);
+    }
+
+    @Override
+    public CommentVO getThumbComment(Long postId) {
+        ThrowUtils.throwIf(postId == null, ErrorCode.PARAMS_ERROR, "帖子id不能为空");
+        Comment comment = this.getOne(new LambdaQueryWrapper<Comment>()
+                .eq(Comment::getPostId, postId)
+                .isNull(Comment::getParentId)
+                .orderByDesc(Comment::getThumbNum)
+                .last("LIMIT 1")
+        );
+        return comment == null ? null : safeGetCommentVO(comment);
     }
 
     private CommentVO safeGetCommentVO(Comment comment) {

@@ -18,21 +18,28 @@ import com.cong.fishisland.config.GitHubConfig;
 import com.cong.fishisland.constant.CommonConstant;
 import com.cong.fishisland.constant.NewUserDataTypeWebConstant;
 import com.cong.fishisland.constant.SystemConstants;
+import com.cong.fishisland.constant.VipTypeConstant;
+import com.cong.fishisland.manager.AiManager;
 import com.cong.fishisland.manager.EmailManager;
+import com.cong.fishisland.mapper.user.UserFollowMapper;
 import com.cong.fishisland.mapper.user.UserMapper;
 import com.cong.fishisland.mapper.user.UserThirdAuthMapper;
+import com.cong.fishisland.mapper.user.UserVipMapper;
+import com.cong.fishisland.model.dto.oauth.LinuxDoTokenResponse;
+import com.cong.fishisland.model.dto.oauth.LinuxDoUserInfo;
 import com.cong.fishisland.model.dto.user.NewUserDataWebRequest;
 import com.cong.fishisland.model.dto.user.UserQueryRequest;
-import com.cong.fishisland.model.entity.user.EmailBan;
-import com.cong.fishisland.model.entity.user.User;
-import com.cong.fishisland.model.entity.user.UserPoints;
-import com.cong.fishisland.model.entity.user.UserThirdAuth;
+import com.cong.fishisland.model.entity.user.*;
 import com.cong.fishisland.model.enums.DeleteStatusEnum;
 import com.cong.fishisland.model.enums.UserRoleEnum;
 import com.cong.fishisland.model.vo.user.*;
 import com.cong.fishisland.service.EmailBanService;
+import com.cong.fishisland.service.LinuxDoOAuth2Service;
 import com.cong.fishisland.service.UserPointsService;
 import com.cong.fishisland.service.UserService;
+import com.cong.fishisland.service.annual.AnnualReportAiService;
+import com.cong.fishisland.service.annual.AnnualReportDataAssembler;
+import com.cong.fishisland.service.annual.AnnualReportTemplateService;
 import com.cong.fishisland.utils.SqlUtils;
 import lombok.extern.slf4j.Slf4j;
 import me.zhyd.oauth.model.AuthCallback;
@@ -102,6 +109,27 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Resource
     private UserThirdAuthMapper userThirdAuthMapper;
+
+    @Resource
+    private UserVipMapper userVipMapper;
+
+    @Resource
+    private LinuxDoOAuth2Service linuxDoOAuth2Service;
+
+    @Resource
+    private AiManager aiManager;
+
+    @Resource
+    private AnnualReportDataAssembler annualReportDataAssembler;
+
+    @Resource
+    private AnnualReportAiService annualReportAiService;
+
+    @Resource
+    private AnnualReportTemplateService annualReportTemplateService;
+
+    @Resource
+    private UserFollowMapper userFollowMapper;
 
     private static final ConcurrentHashMap<String, ReentrantLock> LOCK_MAP = new ConcurrentHashMap<>();
 
@@ -657,6 +685,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return loginUserVO;
         }
 
+        loginUserVO.setVip(isUserVip(user.getId()));
+
         loginUserVO.setPoints(userPoints.getPoints());
         loginUserVO.setLevel(userPoints.getLevel());
         loginUserVO.setUsedPoints(userPoints.getUsedPoints());
@@ -677,6 +707,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         ).collect(Collectors.toList());
         loginUserVO.setBindPlatforms(bindPlatforms);
 
+        // 关注数 & 粉丝数
+        loginUserVO.setFollowingCount(userFollowMapper.countFollowing(user.getId()));
+        loginUserVO.setFollowerCount(userFollowMapper.countFollowers(user.getId()));
+
         return loginUserVO;
     }
 
@@ -687,7 +721,34 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
         UserVO userVO = new UserVO();
         BeanUtils.copyProperties(user, userVO);
+        userVO.setFollowingCount(userFollowMapper.countFollowing(user.getId()));
+        userVO.setFollowerCount(userFollowMapper.countFollowers(user.getId()));
         return userVO;
+    }
+
+    public boolean isUserVip(Long userId) {
+        if (userId == null) {
+            return false;
+        }
+
+        // 查询用户会员信息
+        QueryWrapper<UserVip> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("userId", userId);
+        queryWrapper.eq("isDelete", 0);
+        UserVip userVip = userVipMapper.selectOne(queryWrapper);
+
+        if (userVip == null) {
+            return false;
+        }
+
+        // 如果是永久会员，直接返回true
+        if (VipTypeConstant.PERMANENT.equals(userVip.getType())) {
+            return true;
+        }
+
+        // 如果是月卡会员，检查是否过期
+        Date now = new Date();
+        return userVip.getValidDays() != null && now.before(userVip.getValidDays());
     }
 
     @Override
@@ -695,7 +756,28 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (CollUtil.isEmpty(userList)) {
             return new ArrayList<>();
         }
-        return userList.stream().map(this::getUserVO).collect(Collectors.toList());
+        List<Long> userIds = userList.stream().map(User::getId).collect(Collectors.toList());
+
+        // 批量查关注数：[{userId: x, cnt: n}, ...]
+        Map<Long, Long> followingCountMap = userFollowMapper.batchCountFollowing(userIds).stream()
+                .collect(Collectors.toMap(
+                        m -> ((Number) m.get("userId")).longValue(),
+                        m -> ((Number) m.get("cnt")).longValue()
+                ));
+        // 批量查粉丝数：[{followUserId: x, cnt: n}, ...]
+        Map<Long, Long> followerCountMap = userFollowMapper.batchCountFollowers(userIds).stream()
+                .collect(Collectors.toMap(
+                        m -> ((Number) m.get("followUserId")).longValue(),
+                        m -> ((Number) m.get("cnt")).longValue()
+                ));
+
+        return userList.stream().map(user -> {
+            UserVO userVO = new UserVO();
+            BeanUtils.copyProperties(user, userVO);
+            userVO.setFollowingCount(followingCountMap.getOrDefault(user.getId(), 0L));
+            userVO.setFollowerCount(followerCountMap.getOrDefault(user.getId(), 0L));
+            return userVO;
+        }).collect(Collectors.toList());
     }
 
     @Override
@@ -757,6 +839,141 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return this.userLogin(userAccount, authUser.getUuid() + authUser.getUsername());
     }
 
+    /**
+     * 用户通过 Linux Do 登录（推荐方案：使用 user_third_auth 表）
+     * <p>
+     * 设计理念：
+     * 1. 使用 user_third_auth 表关联第三方账号和本地用户
+     * 2. 通过 platform='linuxdo' + openid=用户ID 唯一确定用户
+     * 3. 支持一个用户绑定多个第三方平台
+     * 4. 即使用户在第三方平台修改了用户名、昵称，也能准确识别
+     * <p>
+     * 使用标准 OAuth2 流程：
+     * 第二步：使用授权码获取访问令牌
+     * 第三步：使用访问令牌获取用户信息
+     *
+     * @param code  授权码
+     * @param state 状态参数
+     * @return {@link TokenLoginUserVo}
+     */
+    @Override
+    public TokenLoginUserVo userLoginByLinuxDo(String code, String state) {
+
+        // 第二步：使用授权码获取访问令牌
+        LinuxDoTokenResponse tokenResponse = linuxDoOAuth2Service.getAccessToken(code);
+        if (tokenResponse == null || StringUtils.isBlank(tokenResponse.getAccessToken())) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "Linux Do 登录失败，获取访问令牌失败");
+        }
+
+        // 第三步：使用访问令牌获取用户信息
+        LinuxDoUserInfo userInfo = linuxDoOAuth2Service.getUserInfo(tokenResponse.getAccessToken());
+        if (userInfo == null || userInfo.getId() == null) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "Linux Do 登录失败，获取用户信息失败");
+        }
+
+        // 核心逻辑：使用 user_third_auth 表查找或创建用户
+        String platform = "linuxdo";
+        String openid = String.valueOf(userInfo.getId());
+
+        // 1. 查找第三方账号绑定记录
+        UserThirdAuth thirdAuth = userThirdAuthMapper.selectOne(
+                new LambdaQueryWrapper<UserThirdAuth>()
+                        .eq(UserThirdAuth::getPlatform, platform)
+                        .eq(UserThirdAuth::getOpenid, openid)
+        );
+
+        User user;
+        if (thirdAuth == null) {
+            // 2. 第三方账号未绑定，创建新用户并绑定
+            log.info("Linux Do 账号未绑定，创建新用户: openid={}", openid);
+            user = createUserWithLinuxDo(userInfo);
+
+            // 创建第三方账号绑定记录
+            saveThirdAuthBinding(user.getId(), platform, openid, userInfo, tokenResponse);
+        } else {
+            // 3. 第三方账号已绑定，直接获取用户
+            log.info("Linux Do 账号已绑定，用户ID: {}", thirdAuth.getUserId());
+            user = this.getById(thirdAuth.getUserId());
+
+            if (user == null) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR, "用户不存在");
+            }
+        }
+
+        // 4. 登录用户
+        StpUtil.login(user.getId());
+        StpUtil.getTokenSession().set(SystemConstants.USER_LOGIN_STATE, user);
+
+        log.info("========== Linux Do 登录流程完成 ==========");
+        return this.getTokenLoginUserVO(user);
+    }
+
+    /**
+     * 创建 Linux Do 新用户
+     *
+     * @param userInfo Linux Do 用户信息
+     * @return 创建的用户对象
+     */
+    private User createUserWithLinuxDo(LinuxDoUserInfo userInfo) {
+        User user = new User();
+
+        // 生成唯一账号：linuxdo_ + MD5(id + salt) 的前8位
+        String uniqueId = DigestUtils.md5DigestAsHex((SALT + userInfo.getId()).getBytes());
+        String userAccount = "linuxdo_" + uniqueId.substring(0, 8);
+
+        // 默认密码 12345678
+        String defaultPassword = "12345678";
+        String encryptPassword = DigestUtils.md5DigestAsHex((SALT + defaultPassword).getBytes());
+
+        user.setUserAccount(userAccount);
+        user.setUserPassword(encryptPassword);
+        user.setUserName(StringUtils.isNotBlank(userInfo.getName()) ? userInfo.getName() : userInfo.getUsername());
+        user.setUserAvatar(userInfo.getAvatarTemplate());
+        user.setUserRole(UserRoleEnum.USER.getValue());
+
+        boolean saveResult = this.save(user);
+        if (!saveResult) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "注册失败");
+        }
+
+        // 保存积分
+        savePoints(user);
+
+        return user;
+    }
+
+    /**
+     * 保存第三方账号绑定记录
+     *
+     * @param userId        本地用户 ID
+     * @param platform      平台名称
+     * @param openid        第三方平台用户 ID（不可变）
+     * @param userInfo      用户信息
+     * @param tokenResponse Token 响应
+     */
+    private void saveThirdAuthBinding(Long userId, String platform, String openid, LinuxDoUserInfo userInfo, LinuxDoTokenResponse tokenResponse) {
+        UserThirdAuth thirdAuth = new UserThirdAuth();
+        thirdAuth.setUserId(userId);
+        thirdAuth.setPlatform(platform);
+        thirdAuth.setOpenid(openid);
+        thirdAuth.setNickname(userInfo.getName());
+        thirdAuth.setAvatar(userInfo.getAvatarTemplate());
+        thirdAuth.setAccessToken(tokenResponse.getAccessToken());
+        thirdAuth.setRefreshToken(tokenResponse.getRefreshToken());
+
+        // 计算过期时间
+        if (tokenResponse.getExpiresIn() != null) {
+            thirdAuth.setExpireTime(new Date(System.currentTimeMillis() + tokenResponse.getExpiresIn() * 1000L));
+        }
+
+        // 保存原始数据（可选）
+        // thirdAuth.setRawData(...);  // 如果需要保存完整的 JSON
+
+        int result = userThirdAuthMapper.insert(thirdAuth);
+        if (result <= 0) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "保存第三方账号绑定失败");
+        }
+    }
 
     @Override
     public UserDataWebVO getUserDataWebVO() {
@@ -797,6 +1014,32 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return userMapper.getNewUserDataWebVOByTime(beginTime, endTime);
         }
         return CollUtil.newArrayList();
+    }
+
+    /**
+     * 生成当前登录用户的当年年度报告
+     *
+     * @return 年度总结 HTML 内容
+     */
+    @Override
+    public String generateUserAnnualReport() {
+        // 1. 获取当前登录用户
+        User currentUser = getLoginUser();
+        Long userId = currentUser.getId();
+        ThrowUtils.throwIf(userId == null || userId <= 0, ErrorCode.PARAMS_ERROR, "用户ID不合法");
+
+        // 2. 计算当前年份并做简单校验
+        int year = DateUtil.year(new Date());
+        ThrowUtils.throwIf(year < 2000 || year > 3000, ErrorCode.PARAMS_ERROR, "年度参数不合法");
+
+        // 3. 聚合年度数据
+        UserAnnualReportVO reportData = annualReportDataAssembler.assemble(currentUser, year);
+
+        // 4. 生成年度总结文案（预留 AI 能力）
+        String summary = annualReportAiService.generateSummary(reportData);
+
+        // 5. 使用 FreeMarker 模板渲染 HTML
+        return annualReportTemplateService.render(reportData, summary);
     }
 
     /**
@@ -849,7 +1092,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 "sina.com",
                 "vip.qq.com",
                 "139.com",
-                "88.com"
+                "88.com",
+                "icloud.com"
         );
 
         // 基本格式校验

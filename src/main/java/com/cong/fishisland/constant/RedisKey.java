@@ -25,6 +25,11 @@ public interface RedisKey {
     String HOT_POST_CACHE_KEY = "hot_post_list";
 
     /**
+     * 数据源 Cookie 缓存 datasource:cookie:{dataSourceKey}
+     */
+    String DATASOURCE_COOKIE_CACHE_KEY = "datasource:cookie:%s";
+
+    /**
      * 用户猜对的英雄
      */
     String GUESS_HERO_USER_CURRENT_HERO = "guess:hero:user:%d:current_hero";
@@ -53,7 +58,48 @@ public interface RedisKey {
      * 用户禁言 user:mute:{userId}
      */
     String USER_MUTE = "user:mute:%d";
+    
+    /**
+     * 管理员撤回消息记录 admin:revoke:records
+     */
+    String ADMIN_REVOKE_RECORDS = "admin:revoke:records";
+    
     String NO_REPEAT_SUBMIT_PREFIX = "noRepeatSubmit:%s:%s";
+
+    /**
+     * 用户年度报告内容摘要缓存 annual:report:content:summary:{userId}:{year}
+     */
+    String ANNUAL_REPORT_CONTENT_SUMMARY = "annual:report:content:summary:%d:%d";
+
+    /**
+     * Boss列表缓存
+     */
+    String BOSS_LIST_CACHE_KEY = "boss:list";
+
+    /**
+     * Boss当前血量缓存 boss:health:{bossId}
+     */
+    String BOSS_HEALTH_CACHE_KEY = "boss:health:%d";
+
+    /**
+     * 用户每日Boss挑战记录 boss:battle:user:{userId}:boss:{bossId}:{date}
+     */
+    String BOSS_BATTLE_USER_DAILY_KEY = "boss:battle:user:%d:boss:%d:%s";
+
+    /**
+     * Boss挑战排行榜 boss:ranking:{bossId}
+     */
+    String BOSS_CHALLENGE_RANKING_KEY = "boss:ranking:%d";
+
+    /**
+     * Boss奖励已发放标记 boss:reward:distributed:{bossId}
+     */
+    String BOSS_REWARD_DISTRIBUTED_KEY = "boss:reward:distributed:%d";
+
+    /**
+     * 帖子中奖用户缓存 post:reward:{postId}:{yyyyMMdd}
+     */
+    String POST_REWARD_USER_KEY = "post:reward:%d:%s";
 
     static String getKey(String key, Object... objects) {
         return BASE_KEY + String.format(key, objects);

@@ -37,9 +37,24 @@ public class UserVO implements Serializable {
     private String userRole;
 
     /**
+     * 朋友圈背景图
+     */
+    private String momentsBgUrl;
+
+    /**
      * 创建时间
      */
     private Date createTime;
+
+    /**
+     * 关注数
+     */
+    private Long followingCount;
+
+    /**
+     * 粉丝数
+     */
+    private Long followerCount;
 
     private static final long serialVersionUID = 1L;
 }

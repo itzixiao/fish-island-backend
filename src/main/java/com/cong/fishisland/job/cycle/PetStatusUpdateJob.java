@@ -1,0 +1,189 @@
+package com.cong.fishisland.job.cycle;
+
+import com.cong.fishisland.model.ws.response.UserChatResponse;
+import com.cong.fishisland.service.FishPetService;
+import com.cong.fishisland.service.PetAutoFeedService;
+import com.cong.fishisland.service.PetTournamentService;
+import com.cong.fishisland.service.UserPointsService;
+import com.cong.fishisland.websocket.service.WebSocketService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * 宠物状态定时更新任务
+ *
+ * @author cong
+ */
+@Component
+@Slf4j
+@RequiredArgsConstructor
+public class PetStatusUpdateJob {
+
+    private final FishPetService fishPetService;
+    private final WebSocketService webSocketService;
+    private final UserPointsService userPointsService;
+    private final PetTournamentService petTournamentService;
+    private final PetAutoFeedService petAutoFeedService;
+
+    // 每小时饥饿度减少值
+    private static final int HUNGER_DECREMENT = 5;
+    // 每小时心情值减少值
+    private static final int MOOD_DECREMENT = 3;
+    // 宠物产出积分的最大值
+    private static final int MAX_PET_POINTS = 60;
+
+
+    /**
+     * 每小时更新宠物经验
+     * 注意：只有当饥饿度和心情值都大于0时，宠物才会获得经验
+     */
+    @Scheduled(fixedRate = 3600000, initialDelay = 3600000)
+    public void updatePetLevel() {
+        List<UserChatResponse> onlineUserList = webSocketService.getOnlineUserList();
+        if (onlineUserList.isEmpty()) {
+            log.info("当前没有在线用户，不执行宠物等级更新任务");
+        } else {
+            log.info("开始执行宠物等级更新任务");
+            List<String> userIds = onlineUserList.stream().map(UserChatResponse::getId).collect(Collectors.toList());
+            
+            try {
+                int updatedCount = fishPetService.batchUpdateOnlineUserPetExp(userIds);
+                
+                if (updatedCount > 0) {
+                    log.info("在线用户宠物经验更新成功，共更新{}个宠物", updatedCount);
+                } else {
+                    log.info("没有符合条件的宠物需要更新经验");
+                }
+                
+                log.info("宠物等级更新任务执行完成");
+            } catch (Exception e) {
+                log.error("宠物等级更新任务执行异常", e);
+            }
+        }
+    }
+
+    /**
+     * 每小时更新宠物状态
+     * 每小时扣除5点饥饿度、3点心情值
+     * 注意：60级宠物不会扣除饥饿度和心情值，会自动保持满值
+     * 注意：饥饿度和心情值为0的宠物无法获得经验
+     */
+    @Scheduled(fixedRate = 3600000, initialDelay = 3600000)
+    public void updatePetStatus() {
+        log.info("开始执行宠物状态更新任务");
+
+        try {
+            // 使用批量更新方法一次性更新所有宠物状态
+            int updatedCount = fishPetService.batchUpdatePetStatus(HUNGER_DECREMENT, MOOD_DECREMENT);
+
+            if (updatedCount > 0) {
+                log.info("宠物状态批量更新成功，共更新{}个宠物", updatedCount);
+                log.info("提醒：60级宠物状态保持满值，其他宠物扣除饥饿度和心情值");
+                log.info("提醒：饥饿度和心情值为0的宠物将无法获得经验和升级");
+            } else {
+                log.info("没有宠物需要更新状态");
+            }
+
+            log.info("宠物状态更新任务执行完成");
+        } catch (Exception e) {
+            log.error("宠物状态更新任务执行异常", e);
+        }
+    }
+    
+    /**
+     * 每天凌晨0点执行宠物积分产出
+     * 产出积分 = 宠物等级（最高10积分）
+     * 注意：只有当饥饿度和心情值都大于0时，宠物才会产出积分
+     */
+    @Scheduled(cron = "0 0 0 * * ?")
+    public void dailyPetPointsGeneration() {
+        log.info("开始执行宠物每日积分产出任务");
+        
+        try {
+            int updatedCount = fishPetService.generateDailyPetPoints(MAX_PET_POINTS);
+            
+            if (updatedCount > 0) {
+                log.info("宠物每日积分产出成功，共有{}个宠物产出积分（饥饿度和心情值都大于0）", updatedCount);
+            } else {
+                log.info("没有符合条件的宠物产出积分（可能是饥饿度或心情值为0）");
+            }
+            
+            log.info("宠物每日积分产出任务执行完成");
+        } catch (Exception e) {
+            log.error("宠物每日积分产出任务执行异常", e);
+        }
+    }
+    
+    /**
+     * 每天凌晨0点5分生成宠物排行榜并更新用户称号
+     * 排行榜数据存入Redis，缓存24小时
+     * 移除昨天排行榜用户的宠物称号，给今天排行榜用户添加宠物称号
+     */
+    @Scheduled(cron = "0 5 0 * * ?")
+    public void generatePetRankList() {
+        log.info("开始执行宠物排行榜生成任务");
+        
+        try {
+            // 1. 生成宠物排行榜
+            int count = fishPetService.generatePetRankList();
+            
+            if (count > 0) {
+                log.info("宠物排行榜生成成功，共有{}个宠物进入排行榜", count);
+            } else {
+                log.info("没有符合条件的宠物进入排行榜");
+            }
+            
+            // 2. 更新用户宠物称号
+            int titleUpdateCount = fishPetService.updatePetRankTitles();
+            
+            if (titleUpdateCount > 0) {
+                log.info("宠物排行榜称号更新成功，共更新{}个用户", titleUpdateCount);
+            } else {
+                log.info("没有用户需要更新宠物称号");
+            }
+            
+            log.info("宠物排行榜生成和称号更新任务执行完成");
+        } catch (Exception e) {
+            log.error("宠物排行榜生成和称号更新任务执行异常", e);
+        }
+    }
+
+    /**
+     * 每天凌晨0点重置武道大会排行榜
+     */
+    @Scheduled(cron = "0 1 0 * * ?")
+    public void resetTournamentLeaderboard() {
+        log.info("开始重置武道大会排行榜");
+        try {
+            petTournamentService.resetDailyLeaderboard();
+            log.info("武道大会排行榜重置完成");
+        } catch (Exception e) {
+            log.error("武道大会排行榜重置异常", e);
+        }
+    }
+
+    /**
+     * 每小时执行宠物自动喂食
+     * 在宠物状态扣减之后执行，确保饥饿度已更新
+     * 对所有启用自动喂食且饥饿度达到阈值的宠物，自动消耗背包中的食物
+     */
+    @Scheduled(fixedRate = 3600000, initialDelay = 3660000)
+    public void autoFeedPets() {
+        log.info("开始执行宠物自动喂食任务");
+        try {
+            int fedCount = petAutoFeedService.executeAutoFeed();
+            if (fedCount > 0) {
+                log.info("宠物自动喂食完成，共喂食 {} 只宠物", fedCount);
+            } else {
+                log.info("本次没有宠物触发自动喂食");
+            }
+        } catch (Exception e) {
+            log.error("宠物自动喂食任务执行异常", e);
+        }
+    }
+} 

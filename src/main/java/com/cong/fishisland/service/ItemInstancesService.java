@@ -1,0 +1,123 @@
+package com.cong.fishisland.service;
+
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.extension.service.IService;
+import com.cong.fishisland.model.dto.item.ItemInstanceAddRequest;
+import com.cong.fishisland.model.dto.item.ItemInstanceEditRequest;
+import com.cong.fishisland.model.dto.item.ItemInstanceQueryRequest;
+import com.cong.fishisland.model.dto.item.ItemInstanceUpdateRequest;
+import com.cong.fishisland.model.entity.pet.ItemInstances;
+import com.cong.fishisland.model.vo.pet.ItemInstanceVO;
+
+/**
+ * @author Shing
+ * @description 针对表【item_instances(物品实例表（玩家真正持有的物品，每个实例可有强化、耐久、附魔等个性化信息）)】的数据库操作Service
+ * @createDate 2025-09-26 15:58:09
+ */
+public interface ItemInstancesService extends IService<ItemInstances> {
+
+
+    /**
+     * 添加物品实例
+     * 如果物品可叠加且已有相同模板，则数量增加
+     * 如果不可叠加，则创建新实例或分解成积分
+     *
+     * @param itemInstanceAddRequest 添加请求
+     * @return 新增或更新的物品实例ID
+     */
+    Long addItemInstance(ItemInstanceAddRequest itemInstanceAddRequest);
+
+    /**
+     * 更新物品实例信息（如数量、绑定状态、强化等级、附加属性等）
+     *
+     * @param itemInstanceUpdateRequest 更新请求
+     * @return 是否成功
+     */
+    boolean updateItemInstance(ItemInstanceUpdateRequest itemInstanceUpdateRequest);
+
+    /**
+     * 编辑物品实例信息（返回编辑后的视图对象）
+     *
+     * @param itemInstanceEditRequest 编辑请求
+     * @return 编辑后的视图对象
+     */
+    ItemInstanceVO editItemInstance(ItemInstanceEditRequest itemInstanceEditRequest);
+
+    /**
+     * 获取查询条件
+     *
+     * @param itemInstanceQueryRequest 查询请求
+     * @return {@link QueryWrapper}<{@link ItemInstances}>
+     */
+    QueryWrapper<ItemInstances> getQueryWrapper(ItemInstanceQueryRequest itemInstanceQueryRequest);
+
+    /**
+     * 分页获取物品实例封装
+     *
+     * @param itemInstancesPage 物品实例分页
+     * @return {@link Page}<{@link ItemInstanceVO}>
+     */
+    Page<ItemInstanceVO> getItemInstancesVoPage(Page<ItemInstances> itemInstancesPage);
+
+    /**
+     * 分解物品实例，将物品的分解积分添加到用户积分中
+     * 两种使用方式：
+     * 1. 用户主动分解背包中的物品：传入 itemInstanceId，其他参数传 null
+     * 2. 系统自动分解（如添加重复物品）：传入 templateId、userId、quantity，itemInstanceId 传 null
+     *
+     * @param itemInstanceId 物品实例ID（场景1必传，场景2传null）
+     * @param templateId     物品模板ID（场景2必传，场景1传null）
+     * @param userId         用户ID（场景2必传，场景1传null）
+     * @param quantity       分解数量（场景2必传，场景1传null）
+     * @return 分解获得的积分数量
+     */
+    Long decomposeItemInstance(Long itemInstanceId, Long templateId, Long userId, Integer quantity);
+
+    /**
+     * 穿戴装备
+     * 将装备穿戴到宠物身上，存储到pet表的extendData中
+     * 槽位由物品模板的equipSlot字段决定
+     *
+     * @param itemInstanceId 物品实例ID
+     * @param userId         用户ID
+     * @return 是否成功
+     */
+    boolean equipItem(Long itemInstanceId, Long userId);
+
+    /**
+     * 卸下装备
+     * 将装备从宠物身上卸下
+     *
+     * @param equipSlot 装备槽位
+     * @param userId    用户ID
+     * @return 是否成功
+     */
+    boolean unequipItem(String equipSlot, Long userId);
+
+    /**
+     * 根据物品实例ID获取物品VO
+     *
+     * @param itemInstanceId 物品实例ID
+     * @return 物品VO
+     */
+    ItemInstanceVO getItemInstanceById(Long itemInstanceId);
+
+    /**
+     * 批量分解蓝绿装备（稀有度1、2）
+     * 已穿戴的装备不会被分解
+     *
+     * @return 分解获得的总积分
+     */
+    Long batchDecomposeBlueGreenEquipments();
+
+    /**
+     * 消耗物品（扣减数量），数量减为0时自动删除实例
+     * 用于消耗品使用场景（如食物喂宠物）
+     *
+     * @param itemInstanceId 物品实例ID
+     * @param quantity       消耗数量
+     */
+    void consumeItem(Long itemInstanceId, int quantity);
+
+}

@@ -166,6 +166,15 @@ public interface UserService extends IService<User> {
     TokenLoginUserVo userLoginByGithub(AuthCallback callback);
 
     /**
+     * 用户通过 Linux Do 登录
+     *
+     * @param code  授权码
+     * @param state 状态参数
+     * @return {@link TokenLoginUserVo}
+     */
+    TokenLoginUserVo userLoginByLinuxDo(String code, String state);
+
+    /**
      * 用户数据
      *
      * @return {@link UserDataWebVO}
@@ -178,4 +187,12 @@ public interface UserService extends IService<User> {
      * @return {@link NewUserDataWebVO}
      */
     List<NewUserDataWebVO> getNewUserDataWebVO(NewUserDataWebRequest request);
+
+    /**
+     * 生成用户年度总结报告
+     *
+     * @return 年度总结 HTML 内容
+     */
+    String generateUserAnnualReport();
+
 }

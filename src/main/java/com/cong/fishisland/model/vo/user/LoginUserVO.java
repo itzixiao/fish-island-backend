@@ -30,6 +30,11 @@ public class LoginUserVO implements Serializable {
     private String userAvatar;
 
     /**
+     * 用户背景图
+     */
+    private String momentsBgUrl;
+
+    /**
      * 用户简介
      */
     private String userProfile;
@@ -40,9 +45,14 @@ public class LoginUserVO implements Serializable {
     private  String email;
 
     /**
-     * 用户角色：user/admin/ban
+     * 用户角色：user/admin/ban/vip
      */
     private String userRole;
+
+    /**
+     * 是否是 VIP 用户
+     */
+    private boolean isVip;
 
     /**
      * 创建时间
@@ -95,6 +105,16 @@ public class LoginUserVO implements Serializable {
      * 第三方平台绑定信息
      */
     private List<PlatformBindVO> bindPlatforms;
+
+    /**
+     * 关注数
+     */
+    private Long followingCount;
+
+    /**
+     * 粉丝数
+     */
+    private Long followerCount;
 
     private static final long serialVersionUID = 1L;
 }

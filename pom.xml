@@ -2,8 +2,8 @@
 <!-- @author <a href="https://github.com/lhccong">程序员聪</a> -->
 <!--   -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
-        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>org.springframework.boot</groupId>
@@ -18,6 +18,7 @@
     <properties>
         <java.version>1.8</java.version>
         <netty-all.version>4.1.76.Final</netty-all.version>
+        <maven.test.skip>true</maven.test.skip>
     </properties>
     <dependencies>
         <dependency>
@@ -190,6 +191,12 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Rome RSS/Atom parsing library -->
+        <dependency>
+            <groupId>com.rometools</groupId>
+            <artifactId>rome</artifactId>
+            <version>1.18.0</version>
+        </dependency>
         <!-- OkHttp 用于HTTP请求 -->
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
@@ -200,6 +207,58 @@
 
     <build>
         <plugins>
+<!--            <plugin>-->
+<!--                <groupId>com.google.cloud.tools</groupId>-->
+<!--                <artifactId>jib-maven-plugin</artifactId>-->
+<!--                <version>3.4.6</version>-->
+<!--                <configuration>-->
+<!--                    <allowInsecureRegistries>true</allowInsecureRegistries>-->
+<!--                    <from>-->
+<!--                        <image>39.105.4.252:5000/eclipse-temurin:17</image>-->
+<!--                        &lt;!&ndash;                        <platforms>&ndash;&gt;-->
+<!--                        &lt;!&ndash;                            <platform>&ndash;&gt;-->
+<!--                        &lt;!&ndash;                                <architecture>arm64</architecture>&ndash;&gt;-->
+<!--                        &lt;!&ndash;                                <os>linux</os>&ndash;&gt;-->
+<!--                        &lt;!&ndash;                            </platform>&ndash;&gt;-->
+<!--                        &lt;!&ndash;                        </platforms>&ndash;&gt;-->
+<!--                        <auth>-->
+<!--                            &lt;!&ndash;在私有镜像仓库上的账号和密码&ndash;&gt;-->
+<!--                            <username>admin</username>-->
+<!--                            <password>password</password>-->
+<!--                        </auth>-->
+<!--                    </from>-->
+<!--                    &lt;!&ndash; 最后生成的镜像配置 &ndash;&gt;-->
+<!--                    <to>-->
+<!--                        &lt;!&ndash; push到私有镜像仓库 &ndash;&gt;-->
+<!--                        <image>39.105.4.252:5000/fish-island-backend</image>-->
+<!--                        &lt;!&ndash; 镜像版本号 &ndash;&gt;-->
+<!--                        <tags>-->
+<!--                            <tag>0.0.1</tag>-->
+<!--                        </tags>-->
+<!--                        <auth>-->
+<!--                            &lt;!&ndash;在私有镜像仓库上的账号和密码&ndash;&gt;-->
+<!--                            <username>admin</username>-->
+<!--                            <password>password</password>-->
+<!--                        </auth>-->
+<!--                    </to>-->
+<!--                    <container>-->
+<!--                        <mainClass>com.cong.fishisland.MainApplication</mainClass>-->
+<!--                        <creationTime>USE_CURRENT_TIMESTAMP</creationTime>-->
+<!--                        <ports>-->
+<!--                            &lt;!&ndash;指定镜像端口 , 这里没用 dockerfile的操作&ndash;&gt;-->
+<!--                            <port>8123</port>-->
+<!--                        </ports>-->
+<!--                    </container>-->
+<!--                </configuration>-->
+<!--                <executions>-->
+<!--                    <execution>-->
+<!--                        <phase>package</phase>-->
+<!--                        <goals>-->
+<!--                            <goal>build</goal>-->
+<!--                        </goals>-->
+<!--                    </execution>-->
+<!--                </executions>-->
+<!--            </plugin>-->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

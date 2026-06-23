@@ -25,10 +25,16 @@ public enum HotDataKeyEnum {
     DOU_YIN("抖音", "DouYin"),
     CS_DN("csdn", "CSDN"),
     JUE_JIN("掘金", "JueJin"),
+    JUE_JIN_HOT("掘金热榜", "JueJinBoiling"),
     SM_ZDM("什么值得买", "SmZdm"),
     ZHI_BO_8("直播吧", "ZhiBo8"),
     TIE_BA("贴吧", "TieBa"),
-    QQ_MUSIC("QQ音乐", "QQMusic");
+    QQ_MUSIC("QQ音乐", "QQMusic"),
+    NGA("NGA杂谈", "NGA"),
+    NGA_QING_FENG("NGA晴风村", "NGAQingFeng"),
+//    LINUX_DO("LinuxDo", "LinuxDo"),
+//    V2EX("V2EX", "V2EX")
+    ;
 
 
     private final String text;

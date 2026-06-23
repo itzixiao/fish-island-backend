@@ -26,9 +26,12 @@ import com.cong.fishisland.model.ws.request.WSBaseReq;
 import com.cong.fishisland.model.ws.response.DrawPlayer;
 import com.cong.fishisland.model.ws.response.UserChatResponse;
 import com.cong.fishisland.model.ws.response.WSBaseResp;
+import com.cong.fishisland.model.dto.admin.AdminRevokeRecordDTO;
+import com.cong.fishisland.service.AdminRevokeRecordService;
 import com.cong.fishisland.service.RoomMessageService;
 import com.cong.fishisland.service.UserMuteService;
 import com.cong.fishisland.service.UserService;
+import com.cong.fishisland.service.UserVipService;
 import com.cong.fishisland.websocket.cache.UserCache;
 import com.cong.fishisland.websocket.event.AIAnswerEvent;
 import com.cong.fishisland.websocket.event.AddSpeakPointEvent;
@@ -76,6 +79,8 @@ public class WebSocketServiceImpl implements WebSocketService {
     private static final String ROOM_ID = "roomId";
     private final RoomMessageService roomMessageService;
     private final UserMuteService userMuteService;
+    private final UserVipService userVipService;
+    private final AdminRevokeRecordService adminRevokeRecordService;
 
 
     /**
@@ -296,6 +301,26 @@ public class WebSocketServiceImpl implements WebSocketService {
                         .eq(RoomMessage::getMessageId, chatMessageVo.getContent()));
                 if (roomMess != null && (roomMess.getUserId() == loginUserId
                         || loginUser.getUserRole().equals(UserConstant.ADMIN_ROLE))) {
+
+                    // 如果是管理员撤回他人消息，记录到Redis
+                    if (!roomMess.getUserId().equals(loginUserId)) {
+                        // 获取被撤回消息的用户信息
+                        User revokedUser = userService.getById(roomMess.getUserId());
+                        if (revokedUser != null) {
+                            AdminRevokeRecordDTO revokeRecord = AdminRevokeRecordDTO.builder()
+                                    .adminId(loginUserId)
+                                    .adminName(loginUser.getUserName())
+                                    .revokedUserId(revokedUser.getId())
+                                    .revokedUserName(revokedUser.getUserName())
+                                    .messageId(chatMessageVo.getContent())
+                                    .revokeTime(new Date())
+                                    .messageContent(roomMess.getMessageJson())
+                                    .build();
+
+                            adminRevokeRecordService.saveRevokeRecord(revokeRecord);
+                        }
+                    }
+
                     roomMessageService.removeById(roomMess.getId());
                     //发送撤回消息
                     sendToAllOnline(WSBaseResp.builder()
@@ -374,8 +399,9 @@ public class WebSocketServiceImpl implements WebSocketService {
             sendMsg(channel, errorResp);
             return null;
         }
-        SendMessageDto result = new SendMessageDto(messageDto, message);
-        return result;
+        message.getSender().setVip(userVipService.isUserVip(loginUserId));
+
+        return new SendMessageDto(messageDto, message);
     }
 
     private static class SendMessageDto {

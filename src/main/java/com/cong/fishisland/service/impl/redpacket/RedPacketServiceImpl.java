@@ -1,27 +1,44 @@
 package com.cong.fishisland.service.impl.redpacket;
 
 import com.alibaba.fastjson.JSON;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.cong.fishisland.common.ErrorCode;
 import com.cong.fishisland.common.exception.BusinessException;
 import com.cong.fishisland.model.dto.redpacket.CreateRedPacketRequest;
+
+import static com.cong.fishisland.model.enums.user.PointsRecordSourceEnum.*;
+
+import com.cong.fishisland.model.entity.chat.RoomMessage;
+import com.cong.fishisland.model.entity.donation.DonationRecords;
 import com.cong.fishisland.model.entity.redpacket.RedPacket;
 import com.cong.fishisland.model.entity.redpacket.RedPacketRecord;
 import com.cong.fishisland.model.entity.user.User;
 import com.cong.fishisland.model.entity.user.UserPoints;
+import com.cong.fishisland.model.enums.MessageTypeEnum;
 import com.cong.fishisland.model.enums.UserRoleEnum;
 import com.cong.fishisland.model.vo.redpacket.RedPacketRecordVO;
-import com.cong.fishisland.service.RedPacketService;
-import com.cong.fishisland.service.UserPointsService;
-import com.cong.fishisland.service.UserService;
+import com.cong.fishisland.model.ws.request.Message;
+import com.cong.fishisland.model.ws.request.MessageWrapper;
+import com.cong.fishisland.model.ws.request.Sender;
+import com.cong.fishisland.model.ws.response.WSBaseResp;
+import com.cong.fishisland.service.*;
+import com.cong.fishisland.service.EventRemindService;
+import com.cong.fishisland.websocket.service.WebSocketService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.BeanUtils;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -38,22 +55,127 @@ public class RedPacketServiceImpl implements RedPacketService {
     private final RedisTemplate<String, Object> redisTemplate;
     private final UserService userService;
     private final UserPointsService userPointsService;
+    private final UserVipService userVipService;
+    private final WebSocketService webSocketService;
+    private final RoomMessageService roomMessageService;
+    private final DonationRecordsService donationRecordsService;
+    private final EventRemindService eventRemindService;
 
     // Redis key前缀
     private static final String RED_PACKET_KEY_PREFIX = "redpacket:";
     private static final String RED_PACKET_RECORD_KEY_PREFIX = "redpacket:record:";
     private static final String RED_PACKET_USER_KEY_PREFIX = "redpacket:user:";
-    private static final String RED_PACKET_LOCK_KEY_PREFIX = "redpacket:lock:";
     private static final String RED_PACKET_DAILY_COUNT_KEY_PREFIX = "redpacket:daily_count:";
+    // 行为检测：脚本用户标记 redpacket:grab:script:{userId}
+    private static final String RED_PACKET_GRAB_SCRIPT_KEY_PREFIX = "redpacket:grab:script:";
+    // 行为检测：每日快速抢包计数 redpacket:grab:fast_count:{userId}:{yyyyMMdd}
+    private static final String RED_PACKET_GRAB_FAST_COUNT_KEY_PREFIX = "redpacket:grab:fast_count:";
+    // 行为检测：抢包时间戳历史 redpacket:grab:ts:{userId}
+    private static final String RED_PACKET_GRAB_TS_KEY_PREFIX = "redpacket:grab:ts:";
+    // 脚本标记 TTL（24小时）
+    private static final long GRAB_SCRIPT_MARK_TTL_SECONDS = 24 * 60 * 60;
+    // 脚本用户抢红包前强制等待时间（秒）
+    private static final int GRAB_SCRIPT_DELAY_SECONDS = 10;
+    // 脚本用户单次抢红包最多获得积分
+    private static final int GRAB_SCRIPT_MAX_AMOUNT = 1;
+    // 判定为脚本的阈值：红包发出后多少毫秒内抢到视为脚本
+    private static final long GRAB_SCRIPT_THRESHOLD_MS = 1000;
+    // 每日触发快速抢包超过此次数才标记为脚本用户
+    private static final int GRAB_SCRIPT_DAILY_LIMIT = 5;
+    // 固定间隔检测：保留最近多少次时间戳
+    private static final int GRAB_TS_HISTORY_SIZE = 6;
+    // 固定间隔检测：间隔标准差低于此值（毫秒）视为固定间隔
+    private static final double GRAB_INTERVAL_STD_THRESHOLD_MS = 500.0;
 
     // 红包过期时间（24小时）
     private static final long RED_PACKET_EXPIRE_TIME = 24 * 60 * 60;
     // 每日发红包次数限制
     private static final int NORMAL_USER_DAILY_LIMIT = 1;
+    private static final int VIP_USER_DAILY_LIMIT = 3;
     private static final int ADMIN_DAILY_LIMIT = 3;
 
-    // 锁的过期时间（10秒）
-    private static final long LOCK_EXPIRE_TIME = 10;
+    // VIP 打赏榜免积分阈值
+    private static final BigDecimal VIP_DONATION_FREE_TWO = new BigDecimal("29");
+    private static final BigDecimal VIP_DONATION_FREE_ALL = new BigDecimal("100");
+
+    // 每个红包的本地排队信号量，保证同一时刻只有一个线程执行抢红包核心逻辑
+    private final ConcurrentHashMap<String, Semaphore> redPacketSemaphores = new ConcurrentHashMap<>();
+    // 排队最长等待时间（秒）
+    private static final int QUEUE_WAIT_TIMEOUT_SECONDS = 10;
+
+    @Scheduled(cron = "0 0 10,15 * * ?") // 每天上午10点和下午3点各执行一次
+    public void aiSendRedPacket() {
+        // 生成红包ID
+        String redPacketId = generateRedPacketId();
+
+        // 创建红包对象
+        RedPacket redPacket = new RedPacket();
+        redPacket.setId(redPacketId);
+        redPacket.setName("我是小助手我给大家发红包啦");
+        redPacket.setCreatorId(-1L);
+        redPacket.setTotalAmount(200);
+        redPacket.setCount(20);
+        redPacket.setType(2);
+        redPacket.setRemainingAmount(200);
+        redPacket.setRemainingCount(20);
+        redPacket.setCreateTime(new Date());
+        redPacket.setExpireTime(new Date(System.currentTimeMillis() + RED_PACKET_EXPIRE_TIME * 1000));
+        // 进行中
+        redPacket.setStatus(0);
+
+        // 如果是平均红包，计算每个红包的金额
+        redPacket.setAmountPerPacket(10);
+
+        // 将红包信息存入Redis
+        String redPacketKey = RED_PACKET_KEY_PREFIX + redPacketId;
+        redisTemplate.opsForValue().set(redPacketKey, redPacket, Duration.ofSeconds(RED_PACKET_EXPIRE_TIME));
+
+        // 创建红包记录集合
+        String redPacketRecordKey = RED_PACKET_RECORD_KEY_PREFIX + redPacketId;
+        redisTemplate.expire(redPacketRecordKey, Duration.ofSeconds(RED_PACKET_EXPIRE_TIME));
+
+        // 创建红包用户集合（用于记录抢过红包的用户）
+        String redPacketUserKey = RED_PACKET_USER_KEY_PREFIX + redPacketId;
+        redisTemplate.opsForSet().add(redPacketUserKey, new HashSet<>());
+        redisTemplate.expire(redPacketUserKey, Duration.ofSeconds(RED_PACKET_EXPIRE_TIME));
+
+        MessageWrapper systemMessageWrapper = getSystemMessageWrapper("[redpacket]" + redPacketId + "[/redpacket]");
+        systemMessageWrapper.getMessage().setRoomId("-1");
+
+        webSocketService.sendToAllOnline(WSBaseResp.builder()
+                .type(MessageTypeEnum.CHAT.getType())
+                .data(systemMessageWrapper).build());
+
+        saveMessage(-1, systemMessageWrapper);
+
+
+    }
+
+    @NotNull
+    private static MessageWrapper getSystemMessageWrapper(String content) {
+        Message message = new Message();
+        message.setId("-1");
+        message.setContent(content);
+        Sender sender = new Sender();
+        sender.setId("-1");
+        sender.setName("摸鱼小助手");
+        sender.setAvatar("https://s1.aigei.com/src/img/gif/41/411d8d587bfc41aeaadfb44ae246da0d.gif?imageMogr2/auto-orient/thumbnail/!282x282r/gravity/Center/crop/282x282/quality/85/%7CimageView2/2/w/282&e=2051020800&token=P7S2Xpzfz11vAkASLTkfHN7Fw-oOZBecqeJaxypL:OU5w-4wX8swq04CJ3p4N0tl_J7E=");
+        sender.setPoints(0);
+        sender.setLevel(1);
+        sender.setUserProfile("");
+        sender.setAvatarFramerUrl("");
+        sender.setTitleId(null);
+        sender.setTitleIdList(null);
+        sender.setRegion("摸鱼岛");
+        sender.setCountry("摸鱼～");
+
+        message.setSender(sender);
+        message.setTimestamp(Instant.now().toString());
+
+        MessageWrapper messageWrapper = new MessageWrapper();
+        messageWrapper.setMessage(message);
+        return messageWrapper;
+    }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -71,19 +193,9 @@ public class RedPacketServiceImpl implements RedPacketService {
 
         //获取当前用户积分
         UserPoints userPoints = userPointsService.getById(loginUser.getId());
-        if (userPoints.getLevel() < 6 && !Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue())) {
+        if (userPoints.getLevel() < 6 && !Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue()) && !userVipService.isUserVip(loginUser.getId())) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "您的等级不足，无法发送红包");
         }
-
-        // 判断用户是否有足够的积分
-        if ((userPoints.getPoints() - userPoints.getUsedPoints() < request.getTotalAmount()) && !Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue())) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "积分不足");
-        }
-
-        if (request.getTotalAmount() <= 0 || request.getCount() <= 0 || request.getTotalAmount() > 100) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "操作红包异常,不能发送大额红包");
-        }
-
 
         // 检查用户每日发红包次数限制
         String dailyCountKey = RED_PACKET_DAILY_COUNT_KEY_PREFIX + loginUser.getId() + ":" + getTodayDate();
@@ -92,15 +204,61 @@ public class RedPacketServiceImpl implements RedPacketService {
             dailyCount = 0;
         }
 
-        int dailyLimit = Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue())
-                ? ADMIN_DAILY_LIMIT
-                : NORMAL_USER_DAILY_LIMIT;
+        int dailyLimit;
+        boolean userVip = userVipService.isUserVip(loginUser.getId());
+        if (Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue())) {
+            dailyLimit = ADMIN_DAILY_LIMIT;
+        } else if (userVip) {
+            dailyLimit = VIP_USER_DAILY_LIMIT;
+        } else {
+            dailyLimit = NORMAL_USER_DAILY_LIMIT;
+        }
+
+        // 计算 VIP 用户今日免积分次数
+        // 默认：VIP 第1个免费；打赏榜>=100：前2个免费；打赏榜>=199：全部免费（同管理员）
+        int vipFreeCount = 0;
+        if (userVip) {
+            // 基础：第1个免费
+            vipFreeCount = 1;
+            DonationRecords donationRecords =
+                    donationRecordsService.getOne(
+                            new QueryWrapper<DonationRecords>()
+                                    .eq("userId", loginUser.getId()));
+            if (donationRecords != null && donationRecords.getAmount() != null) {
+                BigDecimal donationAmount = donationRecords.getAmount();
+                if (donationAmount.compareTo(VIP_DONATION_FREE_ALL) >= 0) {
+                    // 全部免费
+                    vipFreeCount = ADMIN_DAILY_LIMIT;
+                } else if (donationAmount.compareTo(VIP_DONATION_FREE_TWO) >= 0) {
+                    // 前2个免费
+                    vipFreeCount = 2;
+                }
+            }
+        }
+
+        // 判断本次是否需要消耗积分
+        boolean isAdmin = Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue());
+        boolean freeThisTime = isAdmin || (userVip && dailyCount < vipFreeCount);
+
+        // 判断用户是否有足够的积分（免费次数内不检查）
+        if (!freeThisTime && (userPoints.getPoints() - userPoints.getUsedPoints() < request.getTotalAmount())) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "积分不足");
+        }
+
+        if (request.getTotalAmount() <= 0 || request.getCount() <= 0 || request.getTotalAmount() > 100) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "操作红包异常,不能发送大额红包");
+        }
 
         if (dailyCount >= dailyLimit) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR,
-                    Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue())
-                            ? "管理员每日最多只能发送3次红包"
-                            : "您今日已发送过红包，请明天再来");
+            String message;
+            if (Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue())) {
+                message = "管理员每日最多只能发送3次红包";
+            } else if (userVip) {
+                message = "VIP用户每日最多只能发送3次红包";
+            } else {
+                message = "您今日已发送过红包，请明天再来";
+            }
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, message);
         }
 
 
@@ -142,8 +300,8 @@ public class RedPacketServiceImpl implements RedPacketService {
         redisTemplate.expire(redPacketUserKey, Duration.ofSeconds(RED_PACKET_EXPIRE_TIME));
 
         //扣减用户可用积分
-        if (!Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue())) {
-            userPointsService.updateUsedPoints(loginUser.getId(), request.getTotalAmount());
+        if (!freeThisTime) {
+            userPointsService.updateUsedPoints(loginUser.getId(), request.getTotalAmount(), RED_PACKET_SEND.getValue(), redPacketId, "发送红包");
         }
 
         // 更新用户每日发红包次数
@@ -174,15 +332,23 @@ public class RedPacketServiceImpl implements RedPacketService {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "您已抢过该红包");
         }
 
-        // 获取分布式锁
-        String lockKey = RED_PACKET_LOCK_KEY_PREFIX + redPacketId;
-        boolean locked = false;
+        // 行为检测：脚本用户强制等待
+        applyScriptDelay(userId);
+
+        // 本地信号量排队：同一红包同一时刻只允许一个线程执行核心逻辑，其余线程按先后顺序等待
+        Semaphore semaphore = redPacketSemaphores.computeIfAbsent(redPacketId, k -> new Semaphore(1, true));
+        boolean acquired = false;
         try {
-            // 尝试获取锁
-            locked = Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(lockKey, "1", LOCK_EXPIRE_TIME, TimeUnit.SECONDS));
-            if (!locked) {
-                log.info("获取锁失败: {}", redPacketId);
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "抢红包失败，请稍后再试");
+            // 排队等待信号量，最多等待 QUEUE_WAIT_TIMEOUT_SECONDS 秒
+            try {
+                acquired = semaphore.tryAcquire(QUEUE_WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "抢红包被中断，请重试");
+            }
+            if (!acquired) {
+                log.warn("用户 {} 排队超时，红包ID: {}", userId, redPacketId);
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "排队超时，请稍后再试");
             }
 
             // 再次检查红包状态（双重检查）
@@ -205,6 +371,11 @@ public class RedPacketServiceImpl implements RedPacketService {
             } else {
                 // 平均红包
                 amount = redPacket.getAmountPerPacket();
+            }
+
+            // 脚本用户最多只能抢到 1 积分
+            if (isScriptUser(userId)) {
+                amount = Math.min(amount, GRAB_SCRIPT_MAX_AMOUNT);
             }
 
             // 更新红包信息
@@ -236,13 +407,25 @@ public class RedPacketServiceImpl implements RedPacketService {
             redisTemplate.opsForSet().add(redPacketRecordKey, record);
 
             //增加用户积分
-            userPointsService.updateUsedPoints(userId, -amount);
+            userPointsService.updateUsedPoints(userId, -amount, RED_PACKET_GRAB.getValue(), redPacketId, "抢红包获得积分");
+
+            // 行为检测：若在红包发出后1秒内抢到，标记为脚本用户
+            markScriptUserIfNeeded(userId, redPacket.getCreateTime());
+            // 行为检测：固定间隔抢包检测
+            checkFixedIntervalBehavior(userId);
 
             return amount;
         } finally {
-            // 释放锁
-            if (locked) {
-                redisTemplate.delete(lockKey);
+            // 释放本地信号量，让下一个排队的线程进入
+            if (acquired) {
+                semaphore.release();
+            }
+            // 红包已抢完时清理信号量，避免内存泄漏
+            RedPacket finalRedPacket = JSON.parseObject(
+                    JSON.toJSONString(redisTemplate.opsForValue().get(RED_PACKET_KEY_PREFIX + redPacketId)),
+                    RedPacket.class);
+            if (finalRedPacket == null || finalRedPacket.getStatus() != 0) {
+                redPacketSemaphores.remove(redPacketId);
             }
         }
     }
@@ -352,5 +535,128 @@ public class RedPacketServiceImpl implements RedPacketService {
      */
     private String getTodayDate() {
         return java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"));
+    }
+
+    /**
+     * 是否已被标记为脚本用户
+     */
+    private boolean isScriptUser(Long userId) {
+        String scriptKey = RED_PACKET_GRAB_SCRIPT_KEY_PREFIX + userId;
+        return Boolean.TRUE.equals(redisTemplate.hasKey(scriptKey));
+    }
+
+    /**
+     * 脚本用户前置检测：若被标记则强制等待 10 秒
+     */
+    private void applyScriptDelay(Long userId) {
+        if (isScriptUser(userId)) {
+            log.info("用户 {} 被标记为脚本用户，强制等待 {}s", userId, GRAB_SCRIPT_DELAY_SECONDS);
+            try {
+                Thread.sleep(GRAB_SCRIPT_DELAY_SECONDS * 1000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * 抢到红包后判断是否为脚本行为：距红包创建时间不足 1 秒则计数，当天超过 5 次才标记
+     */
+    private void markScriptUserIfNeeded(Long userId, Date redPacketCreateTime) {
+        if (redPacketCreateTime == null) {
+            return;
+        }
+        long elapsed = System.currentTimeMillis() - redPacketCreateTime.getTime();
+        if (elapsed >= GRAB_SCRIPT_THRESHOLD_MS) {
+            return;
+        }
+        // 累加当日快速抢包次数
+        String fastCountKey = RED_PACKET_GRAB_FAST_COUNT_KEY_PREFIX + userId + ":" + getTodayDate();
+        Long fastCount = redisTemplate.opsForValue().increment(fastCountKey);
+        redisTemplate.expire(fastCountKey, Duration.ofDays(1));
+
+        log.info("用户 {} 在红包发出后 {}ms 内抢到，今日快速抢包次数: {}", userId, elapsed, fastCount);
+
+        if (fastCount != null && fastCount > GRAB_SCRIPT_DAILY_LIMIT) {
+            String scriptKey = RED_PACKET_GRAB_SCRIPT_KEY_PREFIX + userId;
+            redisTemplate.opsForValue().set(scriptKey, "1", GRAB_SCRIPT_MARK_TTL_SECONDS, TimeUnit.SECONDS);
+            log.warn("用户 {} 今日快速抢包次数达到 {}，标记为脚本用户", userId, fastCount);
+            User user = userService.getById(userId);
+            eventRemindService.sendSystemNotify(1L,
+                    String.format("检测到用户 %s 今日快速抢包次数达到 %d 次，已标记为脚本用户", user.getUserName() + ":" + user.getId(), fastCount));
+        }
+    }
+
+    /**
+     * 固定间隔检测：记录用户每次抢到红包的时间戳，
+     * 若最近 N 次的相邻间隔标准差极小，视为脚本行为并标记
+     */
+    private void checkFixedIntervalBehavior(Long userId) {
+        String tsKey = RED_PACKET_GRAB_TS_KEY_PREFIX + userId;
+        long now = System.currentTimeMillis();
+
+        // 追加本次时间戳，只保留最近 GRAB_TS_HISTORY_SIZE 条
+        redisTemplate.opsForList().rightPush(tsKey, String.valueOf(now));
+        redisTemplate.opsForList().trim(tsKey, -GRAB_TS_HISTORY_SIZE, -1);
+        redisTemplate.expire(tsKey, Duration.ofDays(1));
+
+        Long size = redisTemplate.opsForList().size(tsKey);
+        if (size == null || size < GRAB_TS_HISTORY_SIZE) {
+            // 样本不足，暂不判断
+            return;
+        }
+
+        List<Object> rawList = redisTemplate.opsForList().range(tsKey, 0, -1);
+        if (rawList == null || rawList.size() < GRAB_TS_HISTORY_SIZE) {
+            return;
+        }
+
+        // 计算相邻间隔
+        long[] intervals = new long[rawList.size() - 1];
+        for (int i = 1; i < rawList.size(); i++) {
+            long t1 = Long.parseLong(rawList.get(i - 1).toString());
+            long t2 = Long.parseLong(rawList.get(i).toString());
+            intervals[i - 1] = t2 - t1;
+        }
+
+        // 计算标准差
+        double mean = Arrays.stream(intervals).average().orElse(0);
+        double variance = Arrays.stream(intervals)
+                .mapToDouble(v -> (v - mean) * (v - mean))
+                .average().orElse(0);
+        double std = Math.sqrt(variance);
+
+        log.info("用户 {} 抢包间隔检测：均值={}ms，标准差={}ms", userId, (long) mean, (long) std);
+
+        if (std < GRAB_INTERVAL_STD_THRESHOLD_MS) {
+            String scriptKey = RED_PACKET_GRAB_SCRIPT_KEY_PREFIX + userId;
+            redisTemplate.opsForValue().set(scriptKey, "1", GRAB_SCRIPT_MARK_TTL_SECONDS, TimeUnit.SECONDS);
+            log.warn("用户 {} 抢包间隔高度一致（std={}ms），标记为脚本用户", userId, (long) std);
+            User user = userService.getById(userId);
+            eventRemindService.sendSystemNotify(1L,
+                    String.format("检测到用户 %s 抢包间隔高度一致（标准差 %dms），已标记为脚本用户", user.getUserName() + ":" + user.getId(), (long) std));
+        }
+    }
+
+    @Override
+    public void markScriptUser(Long userId, boolean mark) {
+        String scriptKey = RED_PACKET_GRAB_SCRIPT_KEY_PREFIX + userId;
+        if (mark) {
+            redisTemplate.opsForValue().set(scriptKey, "1", GRAB_SCRIPT_MARK_TTL_SECONDS, TimeUnit.SECONDS);
+            log.info("管理员手动标记用户 {} 为脚本用户", userId);
+        } else {
+            redisTemplate.delete(scriptKey);
+            log.info("管理员手动取消用户 {} 的脚本标记", userId);
+        }
+    }
+
+    private void saveMessage(long loginUserId, MessageWrapper result) {
+        //保存消息到数据库
+        RoomMessage roomMessage = new RoomMessage();
+        roomMessage.setUserId(loginUserId);
+        roomMessage.setRoomId(-1L);
+        roomMessage.setMessageJson(JSON.toJSONString(result));
+        roomMessage.setMessageId(result.getMessage().getId());
+        roomMessageService.save(roomMessage);
     }
 } 

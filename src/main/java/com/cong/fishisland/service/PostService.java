@@ -3,9 +3,13 @@ package com.cong.fishisland.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.cong.fishisland.model.dto.post.PostFeaturedRequest;
 import com.cong.fishisland.model.dto.post.PostQueryRequest;
+import com.cong.fishisland.model.dto.post.PostRandomThumbRequest;
 import com.cong.fishisland.model.entity.post.Post;
+import com.cong.fishisland.model.vo.post.PostRewardTokenVO;
 import com.cong.fishisland.model.vo.post.PostVO;
+import com.cong.fishisland.model.vo.user.UserRewardVO;
 
 /**
  * 帖子服务
@@ -59,4 +63,41 @@ public interface PostService extends IService<Post> {
      * @param postId 帖子id
      */
     void incrementViewCountAsync(Long postId);
+
+    /**
+     * 设置帖子加精状态
+     * @param request 请求
+     * @return 布尔值
+     */
+    Boolean setFeaturedStatus(PostFeaturedRequest request);
+
+    /**
+     * 获取当前用户收藏的帖子
+     * @param postQueryRequest 帖子查询请求
+     * @param id 用户id
+     * @return {@link Page}<{@link PostVO}>
+     */
+    Page<PostVO> listFavourPostByPage(PostQueryRequest postQueryRequest, Long id);
+
+    /**
+     * 从帖子点赞列表中随机抽取一个用户
+     * @param request 随机点赞请求
+     * @return {@link UserRewardVO}
+     */
+    UserRewardVO randomThumbUser(PostRandomThumbRequest request);
+
+    /**
+     * 获取帖子兑奖加密token
+     * @param postId 帖子id
+     * @param userId 当前用户id
+     * @return {@link PostRewardTokenVO}
+     */
+    PostRewardTokenVO getPostRewardToken(Long postId, Long userId);
+
+    /**
+     * 获取当前中奖用户
+     * @param postId 帖子id
+     * @return {@link UserRewardVO}
+     */
+    UserRewardVO getCurrentRewardUser(Long postId);
 }

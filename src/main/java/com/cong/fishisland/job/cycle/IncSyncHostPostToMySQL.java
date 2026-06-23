@@ -1,15 +1,14 @@
 package com.cong.fishisland.job.cycle;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.cong.fishisland.common.ErrorCode;
-import com.cong.fishisland.common.exception.BusinessException;
+import com.cong.fishisland.constant.RedisKey;
 import com.cong.fishisland.manager.DataSourceRegistry;
-
 import com.cong.fishisland.model.entity.hot.HotPost;
 import com.cong.fishisland.model.enums.HotDataKeyEnum;
 import com.cong.fishisland.service.HotPostService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -17,6 +16,7 @@ import org.springframework.util.StopWatch;
 
 import java.math.BigDecimal;
 import java.util.Date;
+import java.util.Objects;
 
 /**
  * 自动同步热榜数据
@@ -30,11 +30,12 @@ public class IncSyncHostPostToMySQL {
     private final DataSourceRegistry dataSourceRegistry;
     private final HotPostService hotPostService;
     private final RetryTemplate retryTemplate;
+    private final StringRedisTemplate redisTemplate;
 
     /**
      * 每半小时执行一次
      */
-    @Scheduled(fixedRate = 1_800_000)
+    @Scheduled(fixedRate = 1_800_000, initialDelay = 1800000)
     public void run() {
         log.info("开始更新热榜数据...");
         StopWatch stopWatch = new StopWatch();
@@ -51,6 +52,10 @@ public class IncSyncHostPostToMySQL {
         });
         stopWatch.stop();
         log.info("更新热榜数据完成，耗时：{}ms", stopWatch.getTotalTimeMillis());
+        
+        // 清除热榜缓存，确保用户立即看到最新数据
+        redisTemplate.delete(RedisKey.HOT_POST_CACHE_KEY);
+        log.info("已清除热榜缓存，用户将获取最新数据");
     }
 
     private void updateHotPost(String key) {
@@ -69,6 +74,11 @@ public class IncSyncHostPostToMySQL {
             }
         }
         HotPost hotPost = dataSourceRegistry.getDataSourceByType(key).getHotPost();
+
+        if (hotPost == null|| Objects.equals(hotPost.getHostJson(), "[]")) {
+            return;
+        }
+        
         hotPost.setType(key);
         if (oldHotPost != null) {
             hotPost.setId(oldHotPost.getId());
