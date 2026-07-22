@@ -29,12 +29,14 @@ import com.cong.fishisland.model.ws.response.WSBaseResp;
 import com.cong.fishisland.model.dto.admin.AdminRevokeRecordDTO;
 import com.cong.fishisland.service.AdminRevokeRecordService;
 import com.cong.fishisland.service.RoomMessageService;
+import com.cong.fishisland.service.UserAiAvatarService;
 import com.cong.fishisland.service.UserMuteService;
 import com.cong.fishisland.service.UserService;
 import com.cong.fishisland.service.UserVipService;
 import com.cong.fishisland.websocket.cache.UserCache;
 import com.cong.fishisland.websocket.event.AIAnswerEvent;
 import com.cong.fishisland.websocket.event.AddSpeakPointEvent;
+import com.cong.fishisland.websocket.event.UserAiAvatarAnswerEvent;
 import com.cong.fishisland.websocket.event.UserOfflineEvent;
 import com.cong.fishisland.websocket.event.UserOnlineEvent;
 import com.cong.fishisland.websocket.service.WebSocketService;
@@ -78,6 +80,7 @@ public class WebSocketServiceImpl implements WebSocketService {
 
     private static final String ROOM_ID = "roomId";
     private final RoomMessageService roomMessageService;
+    private final UserAiAvatarService userAiAvatarService;
     private final UserMuteService userMuteService;
     private final UserVipService userVipService;
     private final AdminRevokeRecordService adminRevokeRecordService;
@@ -283,13 +286,16 @@ public class WebSocketServiceImpl implements WebSocketService {
                         .data(result.messageDto).build(), loginUserId);
                 //查看是否是给机器人发的
                 List<Sender> mentionedUsers = result.message.getMentionedUsers();
-
+                String messageContent = result.message.getContent();
+                boolean isRobot = messageContent != null && messageContent.contains("@摸鱼助手");
+                if (!isRobot && mentionedUsers != null && !mentionedUsers.isEmpty()) {
+                    isRobot = mentionedUsers.stream().anyMatch(item -> item.getId().equals(UserConstant.ROBOT_ID));
+                }
+                if (isRobot) {
+                    applicationEventPublisher.publishEvent(new AIAnswerEvent(this, result.messageDto));
+                }
                 if (mentionedUsers != null && !mentionedUsers.isEmpty()) {
-                    //校验里面是否有机器人
-                    boolean isRobot = mentionedUsers.stream().anyMatch(item -> item.getId().equals(UserConstant.ROBOT_ID));
-                    if (isRobot) {
-                        applicationEventPublisher.publishEvent(new AIAnswerEvent(this, result.messageDto));
-                    }
+                    publishAiAvatarAnswerEvents(result.message, result.messageDto, mentionedUsers);
                 }
 
                 saveMessage(loginUserId, result);
@@ -370,13 +376,40 @@ public class WebSocketServiceImpl implements WebSocketService {
     }
 
     private void saveMessage(long loginUserId, SendMessageDto result) {
-        //保存消息到数据库
         RoomMessage roomMessage = new RoomMessage();
         roomMessage.setUserId(loginUserId);
         roomMessage.setRoomId(-1L);
         roomMessage.setMessageJson(JSON.toJSONString(result.messageDto));
         roomMessage.setMessageId(result.messageDto.getMessage().getId());
         roomMessageService.save(roomMessage);
+    }
+
+    private void publishAiAvatarAnswerEvents(Message message, MessageWrapper messageDto, List<Sender> mentionedUsers) {
+        String senderId = message.getSender().getId();
+        Set<Long> triggeredUserIds = new HashSet<>();
+
+        for (Sender mentioned : mentionedUsers) {
+            if (mentioned == null || CharSequenceUtil.isBlank(mentioned.getId())) {
+                continue;
+            }
+            if (UserConstant.ROBOT_ID.equals(mentioned.getId())) {
+                continue;
+            }
+            if (mentioned.getId().equals(senderId)) {
+                continue;
+            }
+            try {
+                Long avatarUserId = Long.parseLong(mentioned.getId());
+                if (!triggeredUserIds.add(avatarUserId)) {
+                    continue;
+                }
+                if (userAiAvatarService.getEnabledAvatarByUserId(avatarUserId) != null) {
+                    applicationEventPublisher.publishEvent(new UserAiAvatarAnswerEvent(this, messageDto, avatarUserId));
+                }
+            } catch (NumberFormatException e) {
+                log.warn("非法 @ 用户 ID: {}", mentioned.getId());
+            }
+        }
     }
 
     @Nullable

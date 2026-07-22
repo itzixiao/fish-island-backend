@@ -31,6 +31,7 @@ public enum PointsRecordSourceEnum {
     AVATAR_FRAME_EXCHANGE("avatar_frame_exchange", "兑换头像框"),
     VOTE_CREATE("vote_create", "创建投票"),
     TOWER_CLIMB("tower_climb", "爬塔奖励"),
+    TOURNAMENT_RANK("tournament_rank", "武道大会排行奖励"),
     MOMENTS_PUBLISH("moments_publish", "发布朋友圈"),
     MOMENTS_LIKE("moments_like", "朋友圈点赞"),
     MOMENTS_REWARD("moments_reward", "朋友圈打赏"),
@@ -39,6 +40,9 @@ public enum PointsRecordSourceEnum {
     FARM_HARVEST("farm_harvest", "农场收获"),
     FARM_STEAL("farm_steal", "农场偷菜"),
     FARM_STEAL_LOSS("farm_steal_loss", "农场被偷损失"),
+    AI_AVATAR_GENERATE("ai_avatar_generate", "AI分身提示词生成"),
+    INDEX_BUY("index_buy", "指数买入"),
+    INDEX_SELL("index_sell", "指数卖出"),
     OTHER("other", "其他");
 
     private final String value;

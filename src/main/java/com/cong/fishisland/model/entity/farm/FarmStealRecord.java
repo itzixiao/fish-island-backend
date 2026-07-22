@@ -28,6 +28,9 @@ public class FarmStealRecord {
     @ApiModelProperty(value = "农场主人系统用户ID")
     private Long ownerId;
 
+    @ApiModelProperty(value = "地块ID")
+    private Long landId;
+
     @ApiModelProperty(value = "种植记录ID")
     private Long plantRecordId;
 
@@ -39,4 +42,7 @@ public class FarmStealRecord {
 
     @ApiModelProperty(value = "获得的积分")
     private Integer coinGained = 0;
+
+    @ApiModelProperty(value = "是否已读(0-未读、1-已读)")
+    private Integer isRead = 0;
 }

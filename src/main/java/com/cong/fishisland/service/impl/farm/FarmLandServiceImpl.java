@@ -119,7 +119,7 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
         }
 
         Long userId = StpUtil.getLoginIdAsLong();
-        farmUserService.getOrCreateFarmUser(userId);
+        farmUserService.getFarmUser(userId);
 
         FarmUser farmUser = farmUserService.getById(userId);
         if (farmUser == null) {
@@ -134,32 +134,43 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
         Map<Long, FarmCrop> cropMap = cropMapper.selectBatchIds(cropIds).stream()
                 .collect(Collectors.toMap(FarmCrop::getId, Function.identity()));
 
-        LocalDateTime now = LocalDateTime.now();
-        List<FarmLand> updatedLands = new ArrayList<>(items.size());
-        List<FarmPlantRecord> plantRecords = new ArrayList<>(items.size());
-
+        int totalSeedCost = 0;
         for (PlantItem item : items) {
-            Long landId = item.getLandId();
-            Long cropId = item.getCropId();
-
-            FarmLand land = landMap.get(landId);
+            FarmLand land = landMap.get(item.getLandId());
             if (land == null) {
                 throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "地块不存在");
             }
             if (!land.getUserId().equals(userId)) {
                 throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权操作该地块");
             }
+            if (FarmYesNoEnum.isYes(land.getLocked())) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "地块未解锁，无法种植");
+            }
             if (!Integer.valueOf(FarmLandStatusEnum.IDLE.getValue()).equals(land.getStatus())) {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "地块未空闲，无法种植");
             }
-
-            FarmCrop crop = cropMap.get(cropId);
+            FarmCrop crop = cropMap.get(item.getCropId());
             if (crop == null) {
                 throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "作物不存在");
             }
             if (!cropService.isUnlocked(crop, farmUser.getLevel())) {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "农场等级不足，该作物未解锁");
             }
+            totalSeedCost += crop.getPrice() != null ? crop.getPrice() : 0;
+        }
+        if (totalSeedCost > 0) {
+            userPointsService.checkAvailablePoints(userId, totalSeedCost);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        List<FarmLand> updatedLands = new ArrayList<>(items.size());
+
+        for (PlantItem item : items) {
+            Long landId = item.getLandId();
+            Long cropId = item.getCropId();
+
+            FarmLand land = landMap.get(landId);
+            FarmCrop crop = cropMap.get(cropId);
 
             int seedCost = crop.getPrice() != null ? crop.getPrice() : 0;
             if (seedCost > 0) {
@@ -170,6 +181,21 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
             }
 
             LocalDateTime harvestTime = now.plusMinutes(crop.getGrowthTime());
+
+            boolean updated = lambdaUpdate()
+                    .eq(FarmLand::getId, landId)
+                    .eq(FarmLand::getUserId, userId)
+                    .eq(FarmLand::getStatus, FarmLandStatusEnum.IDLE.getValue())
+                    .eq(FarmLand::getLocked, FarmYesNoEnum.NO.getValue())
+                    .set(FarmLand::getStatus, FarmLandStatusEnum.PLANTING.getValue())
+                    .set(FarmLand::getPlantedCropId, cropId)
+                    .set(FarmLand::getPlantedTime, now)
+                    .set(FarmLand::getHarvestTime, harvestTime)
+                    .set(FarmLand::getUpdateTime, now)
+                    .update();
+            if (!updated) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "地块状态已变化，无法种植");
+            }
 
             land.setStatus(FarmLandStatusEnum.PLANTING.getValue());
             land.setPlantedCropId(cropId);
@@ -186,11 +212,6 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
             record.setHarvestTime(harvestTime);
             record.setPlantedPointsReward(crop.getCoin());
             record.setCreateTime(now);
-            plantRecords.add(record);
-        }
-
-        updateBatchById(updatedLands);
-        for (FarmPlantRecord record : plantRecords) {
             plantRecordMapper.insert(record);
         }
 
@@ -245,7 +266,6 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
                 .collect(Collectors.toMap(FarmCrop::getId, Function.identity()));
 
         List<FarmLand> updatedLands = new ArrayList<>(landIds.size());
-        List<FarmPlantRecord> updatedRecords = new ArrayList<>();
 
         for (Long landId : landIds) {
             FarmLand land = landMap.get(landId);
@@ -265,10 +285,34 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "作物尚未成熟，无法收获");
             }
 
-            FarmCrop crop = cropMap.get(land.getPlantedCropId());
             FarmPlantRecord record = recordMap.get(landId);
+            if (record == null) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "种植记录不存在，无法收获");
+            }
 
-            if (crop != null && record != null) {
+            int marked = plantRecordMapper.markHarvestedIfNot(record.getId(), now);
+            if (marked <= 0) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "作物已被收获");
+            }
+
+            boolean landUpdated = lambdaUpdate()
+                    .eq(FarmLand::getId, landId)
+                    .eq(FarmLand::getUserId, userId)
+                    .in(FarmLand::getStatus,
+                            FarmLandStatusEnum.PLANTING.getValue(),
+                            FarmLandStatusEnum.MATURE.getValue())
+                    .set(FarmLand::getStatus, FarmLandStatusEnum.IDLE.getValue())
+                    .set(FarmLand::getPlantedCropId, null)
+                    .set(FarmLand::getPlantedTime, null)
+                    .set(FarmLand::getHarvestTime, null)
+                    .set(FarmLand::getUpdateTime, now)
+                    .update();
+            if (!landUpdated) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "地块状态已变化，无法收获");
+            }
+
+            FarmCrop crop = cropMap.get(land.getPlantedCropId());
+            if (crop != null) {
                 int actualReward = calcHarvestPointsReward(crop, record);
                 if (actualReward > 0) {
                     userPointsService.updateUsedPoints(userId, -actualReward,
@@ -277,15 +321,12 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
                             buildHarvestPointsDescription(crop, record, actualReward));
                 }
 
-                farmUserService.addExperience(userId, crop.getExperience());
+                int exp = crop.getExperience() != null ? crop.getExperience() : 0;
+                if (exp > 0) {
+                    farmUserService.addExperience(userId, exp);
+                }
                 farmUserService.incrementTotalHarvest(userId);
                 collectionService.updateCollection(userId, crop.getId());
-            }
-
-            if (record != null) {
-                record.setHarvested(FarmYesNoEnum.YES.getValue());
-                record.setHarvestedTime(now);
-                updatedRecords.add(record);
             }
 
             land.setStatus(FarmLandStatusEnum.IDLE.getValue());
@@ -296,25 +337,18 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
             updatedLands.add(land);
         }
 
-        updateBatchById(updatedLands);
-        if (!updatedRecords.isEmpty()) {
-            for (FarmPlantRecord record : updatedRecords) {
-                plantRecordMapper.updateById(record);
-            }
-        }
-
         return updatedLands;
     }
 
     /**
-     * 计算收获可得积分：种植预期奖励减去已被偷积分，且不低于种子成本（与偷菜上限逻辑一致）。
+     * 计算收获可得积分：种植预期奖励减去已被偷积分，且不低于种子价格 + 1（与偷菜上限逻辑一致）。
      */
     private static int calcHarvestPointsReward(FarmCrop crop, FarmPlantRecord record) {
         int baseReward = record.getPlantedPointsReward() != null
                 ? record.getPlantedPointsReward()
                 : (crop.getCoin() != null ? crop.getCoin() : 0);
         int stolenPoints = record.getStolenPoints() != null ? record.getStolenPoints() : 0;
-        int minReward = crop.getPrice() != null ? crop.getPrice() : 0;
+        int minReward = FarmConstants.minHarvestPoints(crop.getPrice());
         return Math.max(minReward, baseReward - stolenPoints);
     }
 
@@ -335,7 +369,8 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
         LandDTO dto = new LandDTO();
         dto.setId(land.getId());
         dto.setLandIndex(land.getLandIndex());
-        dto.setStatus(land.getStatus());
+        dto.setStatus(FarmLandStatusEnum.resolveDisplayStatus(
+                land.getStatus(), land.getHarvestTime(), LocalDateTime.now()));
         dto.setPlantedCropId(land.getPlantedCropId());
         dto.setPlantedTime(land.getPlantedTime());
         dto.setHarvestTime(land.getHarvestTime());

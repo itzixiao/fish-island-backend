@@ -52,9 +52,7 @@ public class LuckyBagServiceImpl implements LuckyBagService {
     private final WebSocketService webSocketService;
     private final RoomMessageService roomMessageService;
     private final DonationRecordsService donationRecordsService;
-
-    /** 赞助榜累计赞助达到该金额，每日首次发福袋免积分 */
-    private static final BigDecimal DONATION_FREE_LUCKY_BAG_AMOUNT = new BigDecimal("100");
+    private final EventRemindService eventRemindService;
 
     private static final String LUCKY_BAG_KEY_PREFIX = "luckybag:";
     private static final String LUCKY_BAG_PARTICIPANTS_KEY_PREFIX = "luckybag:participants:";
@@ -63,6 +61,8 @@ public class LuckyBagServiceImpl implements LuckyBagService {
     private static final String LUCKY_BAG_ACTIVE_SET_KEY = "luckybag:active";
     private static final String LUCKY_BAG_DRAW_LOCK_KEY_PREFIX = "luckybag:draw:lock:";
     private static final String LUCKY_BAG_DAILY_COUNT_KEY_PREFIX = "luckybag:daily_count:";
+    /** 红包与福袋共享免积分次数 */
+    private static final String SEND_FREE_COUNT_KEY_PREFIX = "send:free_count:";
 
     private static final int DEFAULT_DURATION_SECONDS = 180;
     private static final int MIN_DURATION_SECONDS = 60;
@@ -70,13 +70,18 @@ public class LuckyBagServiceImpl implements LuckyBagService {
     private static final int NORMAL_USER_DAILY_LIMIT = 2;
     private static final int VIP_USER_DAILY_LIMIT = 5;
     private static final int ADMIN_DAILY_LIMIT = 10;
-    /** 单个中奖用户最多获得的积分 */
-    private static final int MAX_AMOUNT_PER_WINNER = 50;
+    private static final int VIP_FREE_ALL_COUNT = 3;
+    private static final BigDecimal VIP_DONATION_FREE_TWO = new BigDecimal("29");
+    private static final BigDecimal VIP_DONATION_FREE_ALL = new BigDecimal("100");
+    /**
+     * 单个中奖用户最多获得的积分
+     */
+    private static final int MAX_AMOUNT_PER_WINNER = 20;
     private static final long REDIS_TTL_BUFFER_SECONDS = 3600;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public String createLuckyBag(CreateLuckyBagRequest request) {
+    public LuckyBag createLuckyBag(CreateLuckyBagRequest request) {
         User loginUser = userService.getLoginUser();
         boolean freeThisTime = validateCreateRequest(request, loginUser);
 
@@ -96,16 +101,13 @@ public class LuckyBagServiceImpl implements LuckyBagService {
         luckyBag.setDurationSeconds(durationSeconds);
         luckyBag.setCreateTime(now);
         luckyBag.setExpireTime(expireTime);
+        luckyBag.setDrawTime(expireTime);
         luckyBag.setStatus(0);
         luckyBag.setParticipantCount(0);
 
         long ttlSeconds = durationSeconds + REDIS_TTL_BUFFER_SECONDS;
         String luckyBagKey = LUCKY_BAG_KEY_PREFIX + luckyBagId;
         redisTemplate.opsForValue().set(luckyBagKey, luckyBag, Duration.ofSeconds(ttlSeconds));
-
-        String participantsKey = LUCKY_BAG_PARTICIPANTS_KEY_PREFIX + luckyBagId;
-        redisTemplate.opsForSet().add(participantsKey, new HashSet<>());
-        redisTemplate.expire(participantsKey, Duration.ofSeconds(ttlSeconds));
 
         redisTemplate.opsForZSet().add(LUCKY_BAG_EXPIRE_QUEUE_KEY, luckyBagId, expireTime.getTime());
         redisTemplate.opsForZSet().add(LUCKY_BAG_ACTIVE_SET_KEY, luckyBagId, expireTime.getTime());
@@ -118,12 +120,16 @@ public class LuckyBagServiceImpl implements LuckyBagService {
         String dailyCountKey = LUCKY_BAG_DAILY_COUNT_KEY_PREFIX + loginUser.getId() + ":" + getTodayDate();
         Integer dailyCount = (Integer) redisTemplate.opsForValue().get(dailyCountKey);
         redisTemplate.opsForValue().set(dailyCountKey, (dailyCount == null ? 0 : dailyCount) + 1, Duration.ofDays(1));
+        boolean isAdmin = Objects.equals(loginUser.getUserRole(), UserRoleEnum.ADMIN.getValue());
+        if (freeThisTime && userVipService.isUserVip(loginUser.getId()) && !isAdmin) {
+            incrementSharedFreeUsedCount(loginUser.getId());
+        }
 
         String creatorName = loginUser.getUserName() != null ? loginUser.getUserName() : "用户";
         String broadcastContent = creatorName + "创建了一个福袋快来参加吧[luckybag]" + luckyBagId + "[/luckybag]";
         broadcastLuckyBagMessage(broadcastContent, -1L);
         log.info("用户 {} 创建福袋 {}，{}秒后开奖", loginUser.getId(), luckyBagId, durationSeconds);
-        return luckyBagId;
+        return luckyBag;
     }
 
     @Override
@@ -145,8 +151,10 @@ public class LuckyBagServiceImpl implements LuckyBagService {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "您已参与该福袋");
         }
 
-        Long size = redisTemplate.opsForSet().size(participantsKey);
-        luckyBag.setParticipantCount(size != null ? size.intValue() : 0);
+        long participantsTtlSeconds = luckyBag.getDurationSeconds() + REDIS_TTL_BUFFER_SECONDS;
+        redisTemplate.expire(participantsKey, Duration.ofSeconds(participantsTtlSeconds));
+
+        luckyBag.setParticipantCount(countValidParticipants(participantsKey));
         refreshLuckyBagCache(luckyBag);
     }
 
@@ -158,8 +166,9 @@ public class LuckyBagServiceImpl implements LuckyBagService {
         }
 
         String participantsKey = LUCKY_BAG_PARTICIPANTS_KEY_PREFIX + luckyBagId;
-        Long size = redisTemplate.opsForSet().size(participantsKey);
-        luckyBag.setParticipantCount(size != null ? size.intValue() : 0);
+        luckyBag.setParticipantCount(countValidParticipants(participantsKey));
+        fillDrawTimeIfAbsent(luckyBag);
+        fillJoinedForCurrentUser(luckyBag, participantsKey);
 
         User creator = userService.getById(luckyBag.getCreatorId());
         if (creator != null) {
@@ -191,6 +200,9 @@ public class LuckyBagServiceImpl implements LuckyBagService {
             return Collections.emptyList();
         }
 
+        User loginUser = userService.getLoginUserPermitNull();
+        Long currentUserId = loginUser != null ? loginUser.getId() : null;
+
         List<LuckyBag> result = new ArrayList<>();
         Date nowDate = new Date();
         for (Object idObj : ids) {
@@ -202,8 +214,9 @@ public class LuckyBagServiceImpl implements LuckyBagService {
                 continue;
             }
             String participantsKey = LUCKY_BAG_PARTICIPANTS_KEY_PREFIX + luckyBagId;
-            Long size = redisTemplate.opsForSet().size(participantsKey);
-            luckyBag.setParticipantCount(size != null ? size.intValue() : 0);
+            luckyBag.setParticipantCount(countValidParticipants(participantsKey));
+            fillDrawTimeIfAbsent(luckyBag);
+            luckyBag.setJoined(isUserJoined(participantsKey, currentUserId));
             User creator = userService.getById(luckyBag.getCreatorId());
             if (creator != null) {
                 luckyBag.setCreatorName(creator.getUserName());
@@ -250,22 +263,16 @@ public class LuckyBagServiceImpl implements LuckyBagService {
             }
 
             String participantsKey = LUCKY_BAG_PARTICIPANTS_KEY_PREFIX + luckyBagId;
-            Set<Object> participantObjs = redisTemplate.opsForSet().members(participantsKey);
-            List<Long> participants = new ArrayList<>();
-            if (participantObjs != null) {
-                for (Object obj : participantObjs) {
-                    participants.add(Long.parseLong(obj.toString()));
-                }
-            }
+            List<Long> participants = getValidParticipantIds(participantsKey);
 
             if (participants.isEmpty()) {
                 luckyBag.setStatus(2);
                 refreshLuckyBagCache(luckyBag);
-                userPointsService.updateUsedPoints(luckyBag.getCreatorId(), -luckyBag.getTotalAmount(),
-                        LUCKY_BAG_REFUND.getValue(), luckyBagId, "福袋无人参与退回");
-                broadcastLuckyBagMessage(
-                        String.format("🎁 福袋「%s」已到期，暂无人参与，积分已退回发送者。", luckyBag.getName()),
-                        -1L);
+//                userPointsService.updateUsedPoints(luckyBag.getCreatorId(), -luckyBag.getTotalAmount(),
+//                        LUCKY_BAG_REFUND.getValue(), luckyBagId, "福袋无人参与退回");
+//                broadcastLuckyBagMessage(
+//                        String.format("🎁 福袋「%s」已到期，暂无人参与，积分已退回发送者。", luckyBag.getName()),
+//                        -1L);
                 return;
             }
 
@@ -297,6 +304,13 @@ public class LuckyBagServiceImpl implements LuckyBagService {
                 userPointsService.updateUsedPoints(winnerId, -amount,
                         LUCKY_BAG_WIN.getValue(), luckyBagId, "福袋中奖");
 
+                try {
+                    eventRemindService.sendLuckyBagWinNotify(winnerId, luckyBag.getCreatorId(),
+                            luckyBagId, luckyBag.getName(), amount);
+                } catch (Exception e) {
+                    log.error("福袋中奖事件提醒保存失败: luckyBagId={}, winnerId={}", luckyBagId, winnerId, e);
+                }
+
                 User user = userService.getById(winnerId);
                 String userName = user != null ? user.getUserName() : ("用户" + winnerId);
                 winnerTexts.add(userName + "(" + amount + "积分)");
@@ -320,7 +334,7 @@ public class LuckyBagServiceImpl implements LuckyBagService {
     }
 
     /**
-     * @return 本次是否免积分（赞助榜≥100 每日首次）
+     * @return 本次是否免积分（与红包共享免费次数规则）
      */
     private boolean validateCreateRequest(CreateLuckyBagRequest request, User loginUser) {
         if (request.getTotalAmount() == null || request.getWinnerCount() == null || request.getType() == null) {
@@ -351,34 +365,62 @@ public class LuckyBagServiceImpl implements LuckyBagService {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "您的等级不足，无法发送福袋");
         }
 
-        int dailyLimit = isAdmin ? ADMIN_DAILY_LIMIT : (userVip ? VIP_USER_DAILY_LIMIT : NORMAL_USER_DAILY_LIMIT);
         String dailyCountKey = LUCKY_BAG_DAILY_COUNT_KEY_PREFIX + loginUser.getId() + ":" + getTodayDate();
         Integer dailyCount = (Integer) redisTemplate.opsForValue().get(dailyCountKey);
         int todayCount = dailyCount == null ? 0 : dailyCount;
-        if (todayCount >= dailyLimit) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "今日发送福袋次数已达上限");
+
+        int dailyLimit;
+        if (isAdmin) {
+            dailyLimit = ADMIN_DAILY_LIMIT;
+        } else if (userVip) {
+            dailyLimit = VIP_USER_DAILY_LIMIT;
+        } else {
+            dailyLimit = NORMAL_USER_DAILY_LIMIT;
         }
 
-        int donationFreeCount = getDonationFreeLuckyBagCount(loginUser.getId());
-        boolean freeThisTime = donationFreeCount > 0 && todayCount < donationFreeCount;
+        int vipFreeCount = resolveVipFreeCount(userVip, loginUser.getId());
+        int sharedFreeUsedCount = getSharedFreeUsedCount(loginUser.getId());
+        boolean freeThisTime = isAdmin || (userVip && sharedFreeUsedCount < vipFreeCount);
 
         if (!freeThisTime && userPoints.getPoints() - userPoints.getUsedPoints() < request.getTotalAmount()) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "积分不足");
         }
+
+        if (todayCount >= dailyLimit) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "今日发送福袋次数已达上限");
+        }
+
         return freeThisTime;
     }
 
-    /**
-     * 赞助榜累计≥100 时，每日可免积分发福袋 1 次
-     */
-    private int getDonationFreeLuckyBagCount(Long userId) {
+    private int resolveVipFreeCount(boolean userVip, Long userId) {
+        if (!userVip) {
+            return 0;
+        }
+        int vipFreeCount = 1;
         DonationRecords donationRecords = donationRecordsService.getOne(
                 new QueryWrapper<DonationRecords>().eq("userId", userId));
-        if (donationRecords != null && donationRecords.getAmount() != null
-                && donationRecords.getAmount().compareTo(DONATION_FREE_LUCKY_BAG_AMOUNT) >= 0) {
-            return 1;
+        if (donationRecords != null && donationRecords.getAmount() != null) {
+            BigDecimal donationAmount = donationRecords.getAmount();
+            if (donationAmount.compareTo(VIP_DONATION_FREE_ALL) >= 0) {
+                vipFreeCount = VIP_FREE_ALL_COUNT;
+            } else if (donationAmount.compareTo(VIP_DONATION_FREE_TWO) >= 0) {
+                vipFreeCount = 2;
+            }
         }
-        return 0;
+        return vipFreeCount;
+    }
+
+    private int getSharedFreeUsedCount(Long userId) {
+        String key = SEND_FREE_COUNT_KEY_PREFIX + userId + ":" + getTodayDate();
+        Integer count = (Integer) redisTemplate.opsForValue().get(key);
+        return count == null ? 0 : count;
+    }
+
+    private void incrementSharedFreeUsedCount(Long userId) {
+        String key = SEND_FREE_COUNT_KEY_PREFIX + userId + ":" + getTodayDate();
+        Integer count = (Integer) redisTemplate.opsForValue().get(key);
+        redisTemplate.opsForValue().set(key, (count == null ? 0 : count) + 1, Duration.ofDays(1));
     }
 
     private int resolveDurationSeconds(Integer durationSeconds) {
@@ -443,6 +485,49 @@ public class LuckyBagServiceImpl implements LuckyBagService {
         amounts.add(lastAmount);
         remaining -= lastAmount;
         return new SplitPrizeResult(amounts, remaining);
+    }
+
+    private void fillDrawTimeIfAbsent(LuckyBag luckyBag) {
+        if (luckyBag.getDrawTime() == null && luckyBag.getExpireTime() != null) {
+            luckyBag.setDrawTime(luckyBag.getExpireTime());
+        }
+    }
+
+    private void fillJoinedForCurrentUser(LuckyBag luckyBag, String participantsKey) {
+        User loginUser = userService.getLoginUserPermitNull();
+        Long currentUserId = loginUser != null ? loginUser.getId() : null;
+        luckyBag.setJoined(isUserJoined(participantsKey, currentUserId));
+    }
+
+    private boolean isUserJoined(String participantsKey, Long userId) {
+        if (userId == null) {
+            return false;
+        }
+        Boolean member = redisTemplate.opsForSet().isMember(participantsKey, userId.toString());
+        return Boolean.TRUE.equals(member);
+    }
+
+    private int countValidParticipants(String participantsKey) {
+        return getValidParticipantIds(participantsKey).size();
+    }
+
+    private List<Long> getValidParticipantIds(String participantsKey) {
+        Set<Object> participantObjs = redisTemplate.opsForSet().members(participantsKey);
+        if (participantObjs == null || participantObjs.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Long> participants = new ArrayList<>();
+        for (Object obj : participantObjs) {
+            if (obj == null) {
+                continue;
+            }
+            try {
+                participants.add(Long.parseLong(obj.toString()));
+            } catch (NumberFormatException e) {
+                redisTemplate.opsForSet().remove(participantsKey, obj);
+            }
+        }
+        return participants;
     }
 
     private LuckyBag getLuckyBagFromRedis(String luckyBagId) {

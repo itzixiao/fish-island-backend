@@ -10,6 +10,7 @@ import com.cong.fishisland.mapper.fund.IndexTradeMapper;
 import com.cong.fishisland.model.entity.fund.IndexPosition;
 import com.cong.fishisland.model.entity.fund.IndexTradeRecord;
 import com.cong.fishisland.model.enums.user.PointsRecordSourceEnum;
+import com.cong.fishisland.model.enums.fund.FundConstants;
 import com.cong.fishisland.model.vo.fund.IndexPositionVO;
 import com.cong.fishisland.model.vo.fund.IndexTradeResultVO;
 import com.cong.fishisland.model.vo.fund.IndexTransactionVO;
@@ -30,8 +31,10 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Date;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Supplier;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -84,11 +87,13 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
     @Override
     @Transactional(rollbackFor = Exception.class)
     public IndexTradeResultVO buyIndexWithResult(Long userId, String indexCode, Long amount) {
+        indexCode = validateAndNormalizeIndexCode(indexCode);
+        final String tradeIndexCode = indexCode;
         return runWithIndexBuyLock(userId, () -> {
             checkTradeTime();
-            BigDecimal currentNav = getCurrentNav(indexCode);
+            BigDecimal currentNav = getCurrentNav(tradeIndexCode);
             BigDecimal shares = calculateShares(amount, currentNav);
-            Long tradeId = executeBuy(userId, indexCode, amount, shares, currentNav);
+            Long tradeId = executeBuy(userId, tradeIndexCode, amount, shares, currentNav);
             return buildBuyResult(tradeId, amount, shares, currentNav);
         });
     }
@@ -96,6 +101,7 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
     @Override
     @Transactional(rollbackFor = Exception.class)
     public IndexTradeResultVO sellIndexWithResult(Long userId, String indexCode, BigDecimal shares) {
+        indexCode = validateAndNormalizeIndexCode(indexCode);
         checkTradeTime();
         BigDecimal currentNav = getCurrentNav(indexCode);
         Long grossAmount = calculateAmount(shares, currentNav);
@@ -107,20 +113,41 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
 
     @Override
     public IndexPositionVO getUserPosition(Long userId, String indexCode) {
+        indexCode = validateAndNormalizeIndexCode(indexCode);
         IndexPosition position = positionService.getOrCreatePosition(userId, indexCode);
         BigDecimal currentNav = getCurrentNav(indexCode);
         return buildPositionVO(position, currentNav);
     }
 
     @Override
-    public Page<IndexTransactionVO> getUserTransactionPage(Long userId, String indexCode, Long current, Long pageSize) {
-        List<IndexTradeRecord> records = queryUserTransactions(userId, indexCode);
-        List<IndexTransactionVO> voList = convertToVOList(records);
+    public List<IndexPositionVO> getUserPositions(Long userId) {
+        List<IndexPosition> existingPositions = positionService.list(new LambdaQueryWrapper<IndexPosition>()
+                .eq(IndexPosition::getUserId, userId)
+                .in(IndexPosition::getIndexCode, FundConstants.SUPPORTED_INDEX_CODES));
+        Map<String, IndexPosition> positionMap = existingPositions.stream()
+                .collect(Collectors.toMap(IndexPosition::getIndexCode, position -> position, (a, b) -> a));
 
-        Page<IndexTransactionVO> page = new Page<>(current, pageSize);
-        page.setRecords(voList);
-        page.setTotal(voList.size());
-        return page;
+        return FundConstants.SUPPORTED_INDEX_CODES.stream()
+                .map(code -> {
+                    IndexPosition position = positionMap.getOrDefault(code, buildEmptyPosition(userId, code));
+                    BigDecimal currentNav = getCurrentNav(code);
+                    return buildPositionVO(position, currentNav);
+                })
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public Page<IndexTransactionVO> getUserTransactionPage(Long userId, String indexCode, Integer tradeType,
+                                                           Integer status, Long current, Long pageSize) {
+        if (indexCode != null) {
+            indexCode = validateAndNormalizeIndexCode(indexCode);
+        }
+        LambdaQueryWrapper<IndexTradeRecord> query = buildTransactionQuery(userId, indexCode, tradeType, status);
+        Page<IndexTradeRecord> recordPage = this.page(new Page<>(current, pageSize), query);
+
+        Page<IndexTransactionVO> voPage = new Page<>(recordPage.getCurrent(), recordPage.getSize(), recordPage.getTotal());
+        voPage.setRecords(convertToVOList(recordPage.getRecords()));
+        return voPage;
     }
 
     @Override
@@ -130,6 +157,11 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
 
     @Override
     public List<IndexTradeRecord> getUserTransactions(Long userId, String indexCode) {
+        if (indexCode != null && !indexCode.trim().isEmpty()) {
+            indexCode = validateAndNormalizeIndexCode(indexCode);
+        } else {
+            indexCode = null;
+        }
         return queryUserTransactions(userId, indexCode);
     }
 
@@ -310,6 +342,32 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
     // ==================== 查询辅助方法 ====================
 
     /**
+     * 构建零持仓（仅用于展示，不落地）
+     */
+    private IndexPosition buildEmptyPosition(Long userId, String indexCode) {
+        IndexPosition position = new IndexPosition();
+        position.setUserId(userId);
+        position.setIndexCode(indexCode);
+        position.setTotalShares(BigDecimal.ZERO);
+        position.setAvailableShares(BigDecimal.ZERO);
+        position.setLockedShares(BigDecimal.ZERO);
+        position.setAvgCost(BigDecimal.ZERO);
+        return position;
+    }
+
+    /**
+     * 校验并规范化指数代码
+     */
+    private String validateAndNormalizeIndexCode(String indexCode) {
+        String normalized = FundConstants.normalizeIndexCode(indexCode);
+        if (!FundConstants.isSupportedIndex(normalized)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR,
+                    "暂不支持该指数，当前支持：上证指数(sh000001)、深证成指(sz399001)、创业板指(sz399006)、沪深300(sh000300)、上证50(sh000016)");
+        }
+        return normalized;
+    }
+
+    /**
      * 校验交易时间
      */
     private void checkTradeTime() {
@@ -347,14 +405,32 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
     }
 
     /**
-     * 查询用户交易记录
+     * 查询用户交易记录（单指数，无分页）
      */
     private List<IndexTradeRecord> queryUserTransactions(Long userId, String indexCode) {
+        return this.list(buildTransactionQuery(userId, indexCode, null, null));
+    }
+
+    /**
+     * 构建交易记录查询条件
+     *
+     * @param indexCode null 表示不按指数过滤，返回该用户全部交易记录
+     */
+    private LambdaQueryWrapper<IndexTradeRecord> buildTransactionQuery(Long userId, String indexCode,
+                                                                     Integer tradeType, Integer status) {
         LambdaQueryWrapper<IndexTradeRecord> query = new LambdaQueryWrapper<>();
-        query.eq(IndexTradeRecord::getUserId, userId)
-                .eq(IndexTradeRecord::getIndexCode, indexCode)
-                .orderByDesc(IndexTradeRecord::getCreateTime);
-        return this.list(query);
+        query.eq(IndexTradeRecord::getUserId, userId);
+        if (indexCode != null) {
+            query.eq(IndexTradeRecord::getIndexCode, indexCode);
+        }
+        if (tradeType != null) {
+            query.eq(IndexTradeRecord::getTradeType, tradeType);
+        }
+        if (status != null) {
+            query.eq(IndexTradeRecord::getStatus, status);
+        }
+        query.orderByDesc(IndexTradeRecord::getCreateTime);
+        return query;
     }
 
     // ==================== VO 构建方法 ====================
@@ -398,6 +474,7 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
     private IndexPositionVO buildPositionVO(IndexPosition position, BigDecimal currentNav) {
         IndexPositionVO vo = new IndexPositionVO();
         vo.setIndexCode(position.getIndexCode());
+        vo.setIndexName(FundConstants.getIndexName(position.getIndexCode()));
         vo.setTotalShares(position.getTotalShares());
         vo.setAvailableShares(position.getAvailableShares());
         vo.setLockedShares(position.getLockedShares());
@@ -472,8 +549,13 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
         IndexTransactionVO vo = new IndexTransactionVO();
         vo.setId(record.getId());
         vo.setIndexCode(record.getIndexCode());
+        vo.setIndexName(FundConstants.getIndexName(record.getIndexCode()));
         vo.setTradeType(record.getTradeType());
-        vo.setTradeTypeName(record.getTradeType() == TRADE_TYPE_BUY ? "买入" : "卖出");
+        if (Objects.equals(record.getTradeType(), TRADE_TYPE_BUY)) {
+            vo.setTradeTypeName("买入");
+        } else if (Objects.equals(record.getTradeType(), TRADE_TYPE_SELL)) {
+            vo.setTradeTypeName("卖出");
+        }
         vo.setAmount(record.getAmount());
         vo.setNav(record.getNav());
         vo.setShares(record.getShares());

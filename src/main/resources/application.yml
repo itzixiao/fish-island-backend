@@ -124,10 +124,40 @@ minio:
 
 # 热榜数据源相关配置（按需配置）
 fishisland:
+  koishi:
+    ws-url: ws://127.0.0.1:5140/status
+    # 摸鱼助手 Token 优先从数据源 Cookie 表（dataSourceKey=Koishi）读取，此处仅作兜底
+    token: mock-token
+    platform: sandbox:mock
+    default-user: Eve
+    channel: "#"
+    reply-timeout-seconds: 3
+    connect-timeout-seconds: 15
+    reconnect-delay-seconds: 3
   pet:
     forge:
       # 数值计算是否计入项链(5)、翅膀(6)的锻造等级与词条；暂无实体装备时建议 false
       include-necklace-wings-stats: false
+  tournament:
+    # 武道大会每日排行结算总积分池（按排名百分比分配，规则同 Boss）
+    reward-points: 400
+  nudenet:
+    # 是否启用 NudeNet 图片内容检测
+    enabled: true
+    infer-url: http://localhost:8080/infer
+    score-threshold: 0.4
+    # 检测服务异常时是否放行上传
+    fail-open: true
+    timeout-seconds: 15
+    notify-user-id: 1
+    blocked-classes:
+      - FEMALE_BREAST_EXPOSED
+      - FEMALE_GENITALIA_EXPOSED
+      - MALE_GENITALIA_EXPOSED
+      - MALE_BREAST_EXPOSED
+      - BUTTOCKS_EXPOSED
+      - ANUS_EXPOSED
+      - BELLY_EXPOSED
   datasource:
     nga:
       # 可选：访客 Cookie 等，部分网络环境访问 NGA 需要；勿将含登录态的 Cookie 写入仓库或提交版本控制
