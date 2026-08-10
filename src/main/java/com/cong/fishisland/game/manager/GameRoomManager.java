@@ -42,39 +42,14 @@ public class GameRoomManager {
      */
     private final Map<String, GameRoom> roomMemoryCache = new java.util.concurrent.ConcurrentHashMap<>();
 
-    /**
-     * 重连窗口时间（毫秒）：玩家断线后保留会话的时间
-     */
-    private static final long RECONNECT_WINDOW_MS = 60000L;
-
-    /**
-     * 玩家离线超时（毫秒）：超过这个时间自动移除
-     */
-    private static final long OFFLINE_TIMEOUT_MS = 120000L;
-
     @PostConstruct
     public void init() {
         try {
-            int roomCount = 0;
-            int userRoomCount = 0;
-            int sessionCount = 0;
-
-            // 恢复房间数据
+            // 恢复房间数据到内存缓存
             List<GameRoom> rooms = roomCache.getAllRooms();
             for (GameRoom room : rooms) {
                 roomMemoryCache.put(room.getRoomId(), room);
-                roomCount++;
             }
-
-            // 恢复会话数据（用户会话主要用于断线重连）
-            List<GameSession> sessions = sessionCache.getAllSessions();
-            for (GameSession session : sessions) {
-                sessionCount++;
-            }
-
-            // 验证 user-room 映射
-            Map<Long, String> userRooms = roomCache.getAllUserRooms();
-            userRoomCount = userRooms.size();
         } catch (Exception e) {
             log.error("从 Redis 恢复游戏数据失败", e);
         }
@@ -417,61 +392,61 @@ public class GameRoomManager {
 
     /**
      * 清理超时房间
+     * 规则：
+     * - 房间没人（玩家数 = 0）且 lastActiveTime 超时 → 删除
+     * - 等待中房间（WAITING/READY）玩家数 < 最大人数 且 长时间未开始 → 解散并通知
+     *
+     * 注：游戏中玩家断线 / 全员离线 不在此处理 —— 房间内全部离线时 removeRoom 自然会被触发；
+     * 单人断线时仍保留在房间，等玩家重连。
      */
-    public void cleanTimeoutRooms(long timeoutMs) {
+    public void cleanTimeoutRooms(long waitingTimeoutMs) {
         long now = System.currentTimeMillis();
         Set<String> roomIds = roomCache.getAllRoomIds();
 
-        List<String> toRemove = new ArrayList<>();
         for (String roomId : roomIds) {
             GameRoom room = getRoom(roomId);
-            if (room != null && room.getPlayerCount() == 0 && now - room.getLastActiveTime() > timeoutMs) {
-                toRemove.add(roomId);
+            if (room == null) {
+                continue;
             }
-        }
 
-        for (String roomId : toRemove) {
-            removeRoom(roomId);
-        }
-    }
+            // 规则 A：房间没人 + 超时（无广播，直接删即可）
+            if (room.getPlayerCount() == 0 && now - room.getLastActiveTime() > waitingTimeoutMs) {
+                log.info("房间[{}]无玩家超时，自动删除", roomId);
+                removeRoom(roomId);
+                continue;
+            }
 
-    /**
-     * 清理离线超时的玩家
-     */
-    public void cleanOfflinePlayers() {
-        long now = System.currentTimeMillis();
-
-        List<GameSession> allSessions = sessionCache.getAllSessions();
-        for (GameSession session : allSessions) {
-            if (!session.isOnline() && session.getDisconnectedAt() > 0) {
-                long offlineDuration = now - session.getDisconnectedAt();
-                if (offlineDuration > OFFLINE_TIMEOUT_MS) {
-                    String roomId = session.getRoomId();
-                    if (roomId != null) {
-                        kickPlayer(roomId, session.getUserId());
-                    }
-                }
+            // 规则 B：等待中但凑不齐人 + 超时（解散并广播 roomClosed）
+            boolean isWaiting = room.getState() == RoomStateEnum.WAITING || room.getState() == RoomStateEnum.READY;
+            if (isWaiting && room.getPlayerCount() < room.getMaxPlayers()
+                    && now - room.getLastActiveTime() > waitingTimeoutMs) {
+                log.info("房间[{}]等待中超时（凑不齐人），自动解散", roomId);
+                forceCloseRoom(roomId, "房间长时间未开始，已自动解散");
             }
         }
     }
 
     /**
-     * 获取统计数据
+     * 强制解散房间：先广播 roomClosed 给原成员 → 再删除房间
+     * 用于超时/异常场景下，让正在房间页面的玩家立刻跳走，避免卡在房间
      */
-    public RoomStats getStats() {
-        List<GameRoom> allRooms = roomCache.getAllRooms();
-        int totalRooms = allRooms.size();
-        int waitingRooms = (int) allRooms.stream()
-                .filter(r -> r.getState() == RoomStateEnum.WAITING)
-                .count();
-        int playingRooms = (int) allRooms.stream()
-                .filter(r -> r.getState().isPlaying())
-                .count();
-        int totalPlayers = allRooms.stream()
-                .mapToInt(GameRoom::getPlayerCount)
-                .sum();
+    public void forceCloseRoom(String roomId, String reason) {
+        GameRoom room = getRoom(roomId);
+        if (room == null) {
+            return;
+        }
 
-        return new RoomStats(totalRooms, waitingRooms, playingRooms, totalPlayers);
+        // 先广播给房间内所有玩家
+        if (sessionManager != null) {
+            Map<String, Object> data = new HashMap<>();
+            data.put("roomId", roomId);
+            data.put("reason", reason);
+            sessionManager.broadcastToRoom(room.getPlayerOrder(),
+                    GameMessageTypeEnum.ROOM_CLOSED.getType(), data);
+        }
+
+        // 删除房间（removeRoom 内会清理所有 userRoomId 映射和 session）
+        removeRoom(roomId);
     }
 
     /**
@@ -553,18 +528,6 @@ public class GameRoomManager {
             data.put("gameType", gameType);
             sessionManager.broadcastToAll(GameMessageTypeEnum.ROOM_REMOVED.getType(), data);
         }
-    }
-
-    /**
-     * 房间统计
-     */
-    @lombok.Data
-    @lombok.AllArgsConstructor
-    public static class RoomStats {
-        private int totalRooms;
-        private int waitingRooms;
-        private int playingRooms;
-        private int totalPlayers;
     }
 
     /**

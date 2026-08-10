@@ -639,7 +639,6 @@ stateUpdateData.put("reconnectUserId", userId);
         try {
             JSONObject jsonObj = JSONUtil.parseObj(json);
             String content = jsonObj.getStr("content");
-            String userName = jsonObj.getStr("userName");
 
             if (!StringUtils.hasText(content)) {
                 return GameMessageResult.error(GameMessageTypeEnum.CHAT.getType(), "消息内容不能为空");
@@ -649,10 +648,20 @@ stateUpdateData.put("reconnectUserId", userId);
                 return GameMessageResult.error(GameMessageTypeEnum.CHAT.getType(), "消息内容不能超过200字");
             }
 
+            // 优先信任房间中已记录的用户名（可能含游客昵称），其次使用客户端传递的用户名，最后服务端兜底
+            String userName = null;
+            if (room.getPlayer(userId) != null && StringUtils.hasText(room.getPlayer(userId).getUserName())) {
+                userName = room.getPlayer(userId).getUserName();
+            } else if (StringUtils.hasText(jsonObj.getStr("userName"))) {
+                userName = jsonObj.getStr("userName");
+            } else {
+                userName = getUserInfo(userId).get("userName");
+            }
+
             // 广播聊天消息
             Map<String, Object> chatData = new HashMap<>();
             chatData.put("userId", userId);
-            chatData.put("userName", userName != null ? userName : "玩家");
+            chatData.put("userName", userName);
             chatData.put("content", content);
 
             sessionManager.broadcastToRoom(room.getPlayerOrder(),

@@ -23,6 +23,8 @@ public enum GameMessageTypeEnum {
     ROOM_LIST("gameRoomList", "房间列表"),
     ROOM_ADDED("gameRoomAdded", "房间新增"),
     ROOM_REMOVED("gameRoomRemoved", "房间删除"),
+    // 房间超时解散（专门发给"我正在这个房间里、房间因为凑不齐人被系统踢了"的用户，让他前端跳回列表）
+    ROOM_CLOSED("gameRoomClosed", "房间超时解散"),
     READY("gameReady", "准备"),
     START_GAME("gameStart", "开始游戏"),
 
