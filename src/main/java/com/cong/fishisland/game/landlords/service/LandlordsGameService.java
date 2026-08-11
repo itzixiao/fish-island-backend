@@ -101,7 +101,6 @@ public class LandlordsGameService implements GameService {
         room.setRobRoundStartPlayerId(firstRobPlayerId);
         room.setLastRobPlayerId(null);
         room.setState(RoomStateEnum.ROBBING);
-        room.updateLastActiveTime();
 
         // 同步房间状态到 Redis
         roomManager.saveRoom(room);
@@ -694,9 +693,9 @@ public class LandlordsGameService implements GameService {
             room.getPassedRobPlayers().clear();
         }
 
-        // 进入新的准备阶段：所有玩家必须在 READY_TIMEOUT_MS 内点击准备
-        // 否则会被定时任务自动踢出（包括房主）
+        // 进入准备阶段：设置开始时间，让前端开始倒计时
         room.enterReadyPhase(System.currentTimeMillis());
+
     }
 
     /**

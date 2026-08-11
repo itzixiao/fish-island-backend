@@ -41,29 +41,10 @@ public class GameConstants {
     // ==================== 房间清理超时(毫秒) ====================
 
     /**
-     * 等待中房间超时：房间未满、长时间没人开始 → 自动解散
-     * 默认 3 分钟；超过即视为无人参与
+     * 房间超时解散：不管人够不够，房间创建后10分钟未开始游戏则自动解散
+     * 统一超时，不区分"人不够"和"满员没开始"
+     * 默认 10 分钟
      */
-    public static final long WAITING_ROOM_TIMEOUT_MS = 3 * 60 * 1000L;
+    public static final long ROOM_TIMEOUT_MS = 10 * 60 * 1000L;
 
-    /**
-     * 满员房间超时：3 人齐了但一直不开（没人准备 / 房主不点开始）→ 自动解散
-     * 默认 3 分钟
-     */
-    public static final long ROOM_FULL_NO_START_TIMEOUT_MS = 3 * 60 * 1000L;
-
-    // ==================== 准备超时(毫秒) ====================
-
-    /**
-     * 一局结束后进入下一局时，玩家必须重新点击准备的超时时间
-     * 超过即视为放弃本局，自动踢出房间
-     * 默认 30 秒
-     */
-    public static final long READY_TIMEOUT_MS = 30 * 1000L;
-
-    /**
-     * 准备超时最后告警阈值：剩余多少毫秒时再通知一次前端
-     * 默认 5 秒
-     */
-    public static final long READY_TIMEOUT_WARN_MS = 5 * 1000L;
 }

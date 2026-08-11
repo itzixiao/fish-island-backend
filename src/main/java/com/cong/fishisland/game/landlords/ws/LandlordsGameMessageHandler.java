@@ -277,6 +277,7 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
             stateUpdateData.put("phase", GamePhaseEnum.WAITING);
             stateUpdateData.put("roomState", room.getState());
             stateUpdateData.put("event", GameActionEnum.PLAYER_JOIN.getCode());
+            // 注：readyPhaseStartTime 已包含在 roomInfo 中，前端会从中读取
 
             // 广播给除新玩家外的所有玩家
             sessionManager.broadcastToRoomExcept(userId, room.getPlayerOrder(),
@@ -437,15 +438,8 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
         player.setReady(newReadyState);
         // 玩家准备时清空手牌（确保新一局开始时手牌为空）
         if (newReadyState) {
-            room.markPlayerReady(userId);
             player.getHand().clear(); // 清空旧手牌
             player.resetForNewGame(); // 重置地主状态和底牌标记
-        } else {
-            // 取消准备 → 重新进入超时窗口（让所有玩家必须在 READY_TIMEOUT_MS 内完成准备）
-            long now = System.currentTimeMillis();
-            if (room.getReadyPhaseStartTime() > 0L) {
-                room.enterReadyPhase(now);
-            }
         }
         // 同步房间状态到 Redis
         roomManager.saveRoom(room);
