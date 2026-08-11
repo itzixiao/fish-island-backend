@@ -56,6 +56,33 @@ public enum RoomStateEnum {
     }
 
     /**
+     * 映射回对应的游戏阶段。
+     * <p>仅用于"已知房间状态、需要回填 phase"的场景（如入房/重连广播、托管状态广播）。
+     * 业务关键路径（回合通知、操作结果、游戏开始/结束）必须由调用方按上下文显式设置 phase，
+     * 不要依赖本方法隐式反推。
+     */
+    public GamePhaseEnum toPhase() {
+        if (this == READY) {
+            return GamePhaseEnum.WAITING;
+        }
+        switch (this) {
+            case DISTRIBUTING:
+                return GamePhaseEnum.DEALING;
+            case ROBBING:
+                return GamePhaseEnum.ROBBING;
+            case PLAYING:
+                return GamePhaseEnum.PLAYING;
+            case ENDING:
+                return GamePhaseEnum.ENDING;
+            case CLOSED:
+                return GamePhaseEnum.CLOSED;
+            case WAITING:
+            default:
+                return GamePhaseEnum.WAITING;
+        }
+    }
+
+    /**
      * 从 GamePhaseEnum 转换
      * @deprecated 推荐在 service 层直接根据业务语义填充 roomState/phase，避免两个枚举互相耦合。
      */

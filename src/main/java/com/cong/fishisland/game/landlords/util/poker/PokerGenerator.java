@@ -90,14 +90,23 @@ public class PokerGenerator {
      * 发牌给指定数量的玩家，并保留底牌
      */
     public static DealResult dealWithBottom(PokerHand deck, int playerCount, int cardsPerPlayer, int bottomCards) {
-        List<PokerHand> hands = deal(deck, playerCount, cardsPerPlayer);
         List<Poker> allPokers = new ArrayList<>(deck.getAll());
         int cardsDealt = playerCount * cardsPerPlayer;
 
+        // 先取底牌（从牌堆末尾取）
         List<Poker> bottomList = IntStream.range(0, bottomCards)
-                .filter(i -> allPokers.size() > cardsDealt + i)
-                .mapToObj(allPokers::get)
+                .filter(i -> allPokers.size() > cardsDealt + i - 1)
+                .mapToObj(i -> allPokers.get(allPokers.size() - 1 - i))
                 .collect(Collectors.toList());
+
+        // 从牌堆中移除底牌
+        List<Poker> remainingDeck = new ArrayList<>(allPokers);
+        for (Poker bottom : bottomList) {
+            remainingDeck.remove(bottom);
+        }
+
+        // 发牌（从剩余牌堆中发，从前往后取）
+        List<PokerHand> hands = deal(new PokerHand(remainingDeck), playerCount, cardsPerPlayer);
 
         return new DealResult(hands, new PokerHand(bottomList));
     }
