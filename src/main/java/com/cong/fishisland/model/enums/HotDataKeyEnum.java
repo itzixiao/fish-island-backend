@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 @Getter
 public enum HotDataKeyEnum {
     ZHI_HU("知乎", "zhiHu"),
+    XIAO_HEI_HE("小黑盒", "XiaoHeiHe"),
     WEI_BO("微博", "WeiBo"),
     CODE_FATHER("编程导航", "CodeFather"),
     BILI_BILI("哔哩哔哩", "BiliBili"),

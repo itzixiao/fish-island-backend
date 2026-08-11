@@ -40,12 +40,14 @@ public class DataSourceRegistry {
     private final JueJinBoilingDataSource jueJinBoilingDataSource;
     private final NgaDataSource ngaDataSource;
     private final NgaQingFengDataSource ngaQingFengDataSource;
+    private final XiaoHeiHeDataSource xiaoHeiHeDataSource;
 
 
     @PostConstruct
     public void doInit() {
         typeDataSourceMap = new HashMap<String, DataSource>() {{
             put(HotDataKeyEnum.ZHI_HU.getValue(), zhiHuDataSource);
+            put(HotDataKeyEnum.XIAO_HEI_HE.getValue(), xiaoHeiHeDataSource);
             put(HotDataKeyEnum.JUE_JIN_HOT.getValue(), jueJinBoilingDataSource);
             put(HotDataKeyEnum.WEI_BO.getValue(), weiBoDataSource);
             put(HotDataKeyEnum.CODE_FATHER.getValue(), codeFatherDataSource);
