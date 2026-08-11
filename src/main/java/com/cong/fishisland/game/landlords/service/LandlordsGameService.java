@@ -68,6 +68,16 @@ public class LandlordsGameService implements GameService {
     public GameStateResp startGame(GameRoom room) {
         validatePlayerCount(room);
 
+        // 开始游戏，退出准备阶段（清除准备超时跟踪）
+        room.exitReadyPhase();
+
+        // 开始新游戏时，先清空所有玩家的旧手牌和旧底牌
+        room.setBottomCards(null);
+        for (GamePlayer player : room.getOrderedPlayers()) {
+            player.getHand().clear();
+            player.resetForNewGame(); // 重置地主状态和底牌标记
+        }
+
         // 更新房间状态
         room.setState(RoomStateEnum.DISTRIBUTING);
 
@@ -638,6 +648,8 @@ public class LandlordsGameService implements GameService {
         resetData.put("playerCount", room.getPlayerCount());
         resetData.put("roomState", RoomStateEnum.WAITING);
         resetData.put("phase", GamePhaseEnum.WAITING);
+        // 进入准备阶段，把准备阶段开始时间广播给客户端，让前端可以本地倒计时
+        resetData.put("readyPhaseStartTime", room.getReadyPhaseStartTime());
         sessionManager.broadcastToRoom(room.getPlayerOrder(),
                 GameMessageTypeEnum.STATE_UPDATE.getType(), resetData);
 
@@ -658,6 +670,8 @@ public class LandlordsGameService implements GameService {
 
         // 设置房间状态为结束
         room.setState(RoomStateEnum.ENDING);
+        // 退出准备阶段，避免玩家被踢
+        room.exitReadyPhase();
 
         // 取消所有机器人的托管
         for (GamePlayer player : room.getOrderedPlayers()) {
@@ -684,18 +698,19 @@ public class LandlordsGameService implements GameService {
 
     /**
      * 重置房间为等待状态，准备下一局
+     * 注意：不清空手牌，让玩家能看到上一局的结算画面
      */
     public void resetRoomForNewRound(GameRoom room) {
 
         // 重置房间状态为等待
         room.setState(RoomStateEnum.WAITING);
 
-        // 清空所有玩家的准备状态
+        // 清空准备状态（但保留手牌，让玩家能看到结算画面）
         for (GamePlayer player : room.getOrderedPlayers()) {
             player.setReady(false);
             player.setRobScore(0);
             player.setCurrentPlayedCards(null);
-            // 如果玩家离线但还在房间，保持离线状态
+            // 不清空手牌！
         }
 
         // 重置游戏相关字段
@@ -715,6 +730,9 @@ public class LandlordsGameService implements GameService {
             room.getPassedRobPlayers().clear();
         }
 
+        // 进入新的准备阶段：所有玩家必须在 READY_TIMEOUT_MS 内点击准备
+        // 否则会被定时任务自动踢出（包括房主）
+        room.enterReadyPhase(System.currentTimeMillis());
     }
 
     /**
@@ -837,6 +855,8 @@ public class LandlordsGameService implements GameService {
                 .lastPlayerName(lastPlayerName)
                 .lastPatternDesc(lastPatternDesc)
                 .handCards(handCards)
+                // 准备阶段信息：让前端在 ready 阶段能展示倒计时
+                .readyPhaseStartTime(room.getReadyPhaseStartTime() > 0L ? room.getReadyPhaseStartTime() : null)
                 .build();
     }
 
