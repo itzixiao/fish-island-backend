@@ -1,7 +1,11 @@
 package com.cong.fishisland.game.manager;
 
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONWriter;
 import com.cong.fishisland.game.cache.GameRoomRedisCache;
 import com.cong.fishisland.game.cache.GameSessionRedisCache;
+import com.cong.fishisland.game.constant.GameConstants;
+import com.cong.fishisland.game.enums.GameActionEnum;
 import com.cong.fishisland.game.enums.GameMessageTypeEnum;
 import com.cong.fishisland.game.enums.GameTypeEnum;
 import com.cong.fishisland.game.enums.RoomStateEnum;
@@ -395,6 +399,7 @@ public class GameRoomManager {
      * 规则：
      * - 房间没人（玩家数 = 0）且 lastActiveTime 超时 → 删除
      * - 等待中房间（WAITING/READY）玩家数 < 最大人数 且 长时间未开始 → 解散并通知
+     * - 满员后没人开始游戏 → 解散并通知（防止房主一直不点开始，3 人干等）
      *
      * 注：游戏中玩家断线 / 全员离线 不在此处理 —— 房间内全部离线时 removeRoom 自然会被触发；
      * 单人断线时仍保留在房间，等玩家重连。
@@ -416,14 +421,93 @@ public class GameRoomManager {
                 continue;
             }
 
-            // 规则 B：等待中但凑不齐人 + 超时（解散并广播 roomClosed）
+            // 只对等待中房间做"凑不齐人 / 满员不开"判定
             boolean isWaiting = room.getState() == RoomStateEnum.WAITING || room.getState() == RoomStateEnum.READY;
+
+            // 规则 B：等待中但凑不齐人 + 超时（解散并广播 roomClosed）
             if (isWaiting && room.getPlayerCount() < room.getMaxPlayers()
                     && now - room.getLastActiveTime() > waitingTimeoutMs) {
                 log.info("房间[{}]等待中超时（凑不齐人），自动解散", roomId);
                 forceCloseRoom(roomId, "房间长时间未开始，已自动解散");
+                continue;
+            }
+
+            // 规则 C：满员 + 没人开始游戏（满员时间超过阈值）→ 解散
+            // 注意：玩家可能都点了准备但房主没开始，仍走这条规则
+            if (isWaiting && room.getPlayerCount() == room.getMaxPlayers()
+                    && room.getFullSinceTime() > 0L
+                    && now - room.getFullSinceTime() > GameConstants.ROOM_FULL_NO_START_TIMEOUT_MS) {
+                log.info("房间[{}]满员后长时间未开始，自动解散", roomId);
+                forceCloseRoom(roomId, "房间满员后长时间未开始，已自动解散");
+                continue;
+            }
+
+            // 规则 D：准备超时 → 踢掉未准备的玩家（包括房主）
+            if (isWaiting && room.getReadyPhaseStartTime() > 0L) {
+                List<Long> timeoutPlayers = room.getReadyTimeoutPlayers(now);
+                for (Long userId : timeoutPlayers) {
+                    GamePlayer p = room.getPlayer(userId);
+                    if (p == null) {
+                        continue;
+                    }
+                    log.info("房间[{}]玩家[{}]准备超时，自动踢出", roomId, userId);
+                    kickPlayerForReadyTimeout(roomId, userId, p.getUserName());
+                }
             }
         }
+    }
+
+    /**
+     * 准备超时踢人：广播踢人消息给被踢玩家本人 + 房间内其他玩家 → 再调用通用 kickPlayer
+     * 被踢玩家收到 playerKicked 事件后前端跳转回房间列表
+     */
+    public void kickPlayerForReadyTimeout(String roomId, Long userId, String userName) {
+        GameRoom room = getRoom(roomId);
+        if (room == null) {
+            return;
+        }
+        // 防止重复处理
+        if (room.getPlayer(userId) == null) {
+            return;
+        }
+
+        // 1) 给被踢玩家单独发 playerKicked 事件，前端收到后跳回列表
+        if (sessionManager != null) {
+            Map<String, Object> kickData = new HashMap<>();
+            kickData.put("event", GameActionEnum.PLAYER_KICKED.getCode());
+            kickData.put("roomId", roomId);
+            kickData.put("userId", userId);
+            kickData.put("userName", userName);
+            kickData.put("reason", "准备超时未点击准备，已自动移出房间");
+            sessionManager.sendToUser(userId, buildWsMessage(GameMessageTypeEnum.STATE_UPDATE.getType(), kickData));
+        }
+
+        // 2) 真正踢人（清会话、移玩家、空房删）
+        kickPlayer(roomId, userId);
+
+        // 3) 重新获取最新 roomInfo 广播给其他人
+        GameRoom afterRoom = getRoom(roomId);
+        if (afterRoom != null && sessionManager != null) {
+            Map<String, Object> stateUpdateData = new HashMap<>();
+            stateUpdateData.put("roomInfo", afterRoom.toRoomInfoResp());
+            stateUpdateData.put("players", afterRoom.toRoomInfoResp().getPlayers());
+            stateUpdateData.put("playerCount", afterRoom.getPlayerCount());
+            stateUpdateData.put("event", GameActionEnum.PLAYER_LEAVE.getCode());
+            stateUpdateData.put("playerId", userId);
+            stateUpdateData.put("playerName", userName);
+            sessionManager.broadcastToRoom(afterRoom.getPlayerOrder(),
+                    GameMessageTypeEnum.STATE_UPDATE.getType(), stateUpdateData);
+        }
+    }
+
+    /**
+     * 构造 WS 消息 JSON
+     */
+    private String buildWsMessage(String type, Object data) {
+        Map<String, Object> wsBaseResp = new HashMap<>();
+        wsBaseResp.put("type", type);
+        wsBaseResp.put("data", data);
+        return JSON.toJSONString(wsBaseResp, JSONWriter.Feature.WriteLongAsString);
     }
 
     /**

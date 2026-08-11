@@ -426,6 +426,16 @@ stateUpdateData.put("reconnectUserId", userId);
         // 切换准备状态
         boolean newReadyState = !player.isReady();
         player.setReady(newReadyState);
+        // 标记该玩家的准备超时 deadline 已重置 / 清除
+        if (newReadyState) {
+            room.markPlayerReady(userId);
+        } else {
+            // 取消准备 → 重新进入超时窗口（让所有玩家必须在 READY_TIMEOUT_MS 内完成准备）
+            long now = System.currentTimeMillis();
+            if (room.getReadyPhaseStartTime() > 0L) {
+                room.enterReadyPhase(now);
+            }
+        }
         // 同步房间状态到 Redis
         roomManager.saveRoom(room);
 
@@ -434,6 +444,7 @@ stateUpdateData.put("reconnectUserId", userId);
         broadcastData.put("roomInfo", room.toRoomInfoResp());
         broadcastData.put("players", room.toRoomInfoResp().getPlayers());
         broadcastData.put("playerCount", room.getPlayerCount());
+        broadcastData.put("readyPhaseStartTime", room.getReadyPhaseStartTime());
         sessionManager.broadcastToRoom(room.getPlayerOrder(),
                 GameMessageTypeEnum.STATE_UPDATE.getType(), broadcastData);
 

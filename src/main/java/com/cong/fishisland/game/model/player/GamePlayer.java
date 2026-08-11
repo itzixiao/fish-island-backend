@@ -92,6 +92,11 @@ public class GamePlayer {
      */
     private RobotReasonEnum robotReason;
 
+    /**
+     * 底牌是否已添加（防止重复添加）
+     */
+    private boolean bottomCardsAdded;
+
     public GamePlayer() {
         this.hand = new PokerHand();
         this.currentPlayedCards = new ArrayList<>();
@@ -102,6 +107,7 @@ public class GamePlayer {
         this.robScore = 0;
         this.robotControlled = false;
         this.robotReason = null;
+        this.bottomCardsAdded = false;
     }
 
     public GamePlayer(Long userId, String userName, String avatar) {
@@ -167,14 +173,44 @@ public class GamePlayer {
     @JSONField(serialize = false)
     public void setAsLandlord() {
         this.isLandlord = true;
+        this.bottomCardsAdded = false; // 重置标记
     }
 
     /**
-     * 设置为非地主
+     * 设置为非地主（标记底牌已移除）
      */
     @JSONField(serialize = false)
     public void removeLandlord() {
         this.isLandlord = false;
+        // 标记底牌已移除（实际移除在 GameRoom 中处理）
+        this.bottomCardsAdded = false;
+    }
+
+    /**
+     * 标记底牌已添加
+     */
+    @JSONField(serialize = false)
+    public void markBottomCardsAdded() {
+        this.bottomCardsAdded = true;
+    }
+
+    /**
+     * 检查底牌是否已添加
+     */
+    @JSONField(serialize = false)
+    public boolean isBottomCardsAdded() {
+        return this.bottomCardsAdded;
+    }
+
+    /**
+     * 重置为新游戏准备（不清空手牌内容，只重置状态）
+     */
+    @JSONField(serialize = false)
+    public void resetForNewGame() {
+        this.isLandlord = false;
+        this.bottomCardsAdded = false;
+        this.robScore = 0;
+        this.finished = false;
     }
 
     /**

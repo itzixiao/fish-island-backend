@@ -109,6 +109,14 @@ public class GameStateResp {
      */
     private String lastPatternDesc;
 
+    // ==================== 准备阶段信息 ====================
+
+    /**
+     * 当前准备阶段开始时间（毫秒）
+     * 0 表示不在准备阶段；用于前端本地计算 ready 倒计时
+     */
+    private Long readyPhaseStartTime;
+
     // ==================== 玩家信息 ====================
 
     /**
