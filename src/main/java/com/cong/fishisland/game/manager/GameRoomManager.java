@@ -178,6 +178,11 @@ public class GameRoomManager {
             if (!room.addPlayer(player)) {
                 return null;
             }
+
+            // 新玩家加入后，检查房间是否已满，满则启动准备超时
+            if (room.getPlayerCount() >= room.getMaxPlayers()) {
+                room.enterReadyPhase(System.currentTimeMillis());
+            }
         } else {
             // 重连：恢复玩家在线状态
             player.setOnline(true);
@@ -341,13 +346,14 @@ public class GameRoomManager {
     }
 
     /**
-     * 按游戏类型获取房间列表
+     * 按游戏类型获取房间列表（包含所有游戏阶段：等待、准备、叫地主、游戏中的房间）
      */
     public List<GameRoom> getRoomsByType(GameTypeEnum gameType) {
         return roomCache.getRoomsByType(gameType).stream()
                 .filter(r -> r.getState() == RoomStateEnum.WAITING
                         || r.getState() == RoomStateEnum.READY
-                        || r.getState() == RoomStateEnum.ROBBING)
+                        || r.getState() == RoomStateEnum.ROBBING
+                        || r.getState() == RoomStateEnum.PLAYING)
                 .sorted(Comparator.comparing(GameRoom::getCreateTime).reversed())
                 .collect(Collectors.toList());
     }
@@ -395,16 +401,16 @@ public class GameRoomManager {
     }
 
     /**
-     * 清理超时房间
-     * 规则：
-     * - 房间没人（玩家数 = 0）且 lastActiveTime 超时 → 删除
-     * - 等待中房间（WAITING/READY）玩家数 < 最大人数 且 长时间未开始 → 解散并通知
-     * - 满员后没人开始游戏 → 解散并通知（防止房主一直不点开始，3 人干等）
+     * 清理超时房间（统一超时策略）
      *
-     * 注：游戏中玩家断线 / 全员离线 不在此处理 —— 房间内全部离线时 removeRoom 自然会被触发；
-     * 单人断线时仍保留在房间，等玩家重连。
+     * 规则：
+     * - 房间没人（玩家数 = 0）且 createTime 超时 → 删除
+     * - 等待中房间（WAITING/READY）createTime 超时 → 解散并通知
+     * - 游戏进行中的房间不清理（游戏时间可能很长）
+     *
+     * 注意：准备超时由前端处理，后端不处理单个玩家的准备超时
      */
-    public void cleanTimeoutRooms(long waitingTimeoutMs) {
+    public void cleanTimeoutRooms(long roomTimeoutMs) {
         long now = System.currentTimeMillis();
         Set<String> roomIds = roomCache.getAllRoomIds();
 
@@ -414,89 +420,25 @@ public class GameRoomManager {
                 continue;
             }
 
+            // 游戏进行中的房间不清理
+            if (room.getState().isPlaying()) {
+                continue;
+            }
+
             // 规则 A：房间没人 + 超时（无广播，直接删即可）
-            if (room.getPlayerCount() == 0 && now - room.getLastActiveTime() > waitingTimeoutMs) {
+            if (room.getPlayerCount() == 0 && now - room.getCreateTime() > roomTimeoutMs) {
                 log.info("房间[{}]无玩家超时，自动删除", roomId);
                 removeRoom(roomId);
                 continue;
             }
 
-            // 只对等待中房间做"凑不齐人 / 满员不开"判定
+            // 规则 B：等待中房间 createTime 超时 → 解散并广播 roomClosed
             boolean isWaiting = room.getState() == RoomStateEnum.WAITING || room.getState() == RoomStateEnum.READY;
-
-            // 规则 B：等待中但凑不齐人 + 超时（解散并广播 roomClosed）
-            if (isWaiting && room.getPlayerCount() < room.getMaxPlayers()
-                    && now - room.getLastActiveTime() > waitingTimeoutMs) {
-                log.info("房间[{}]等待中超时（凑不齐人），自动解散", roomId);
-                forceCloseRoom(roomId, "房间长时间未开始，已自动解散");
+            if (isWaiting && now - room.getCreateTime() > roomTimeoutMs) {
+                log.info("房间[{}]超时未开始游戏，自动解散", roomId);
+                forceCloseRoom(roomId, "房间超时未开始游戏，已自动解散");
                 continue;
             }
-
-            // 规则 C：满员 + 没人开始游戏（满员时间超过阈值）→ 解散
-            // 注意：玩家可能都点了准备但房主没开始，仍走这条规则
-            if (isWaiting && room.getPlayerCount() == room.getMaxPlayers()
-                    && room.getFullSinceTime() > 0L
-                    && now - room.getFullSinceTime() > GameConstants.ROOM_FULL_NO_START_TIMEOUT_MS) {
-                log.info("房间[{}]满员后长时间未开始，自动解散", roomId);
-                forceCloseRoom(roomId, "房间满员后长时间未开始，已自动解散");
-                continue;
-            }
-
-            // 规则 D：准备超时 → 踢掉未准备的玩家（包括房主）
-            if (isWaiting && room.getReadyPhaseStartTime() > 0L) {
-                List<Long> timeoutPlayers = room.getReadyTimeoutPlayers(now);
-                for (Long userId : timeoutPlayers) {
-                    GamePlayer p = room.getPlayer(userId);
-                    if (p == null) {
-                        continue;
-                    }
-                    log.info("房间[{}]玩家[{}]准备超时，自动踢出", roomId, userId);
-                    kickPlayerForReadyTimeout(roomId, userId, p.getUserName());
-                }
-            }
-        }
-    }
-
-    /**
-     * 准备超时踢人：广播踢人消息给被踢玩家本人 + 房间内其他玩家 → 再调用通用 kickPlayer
-     * 被踢玩家收到 playerKicked 事件后前端跳转回房间列表
-     */
-    public void kickPlayerForReadyTimeout(String roomId, Long userId, String userName) {
-        GameRoom room = getRoom(roomId);
-        if (room == null) {
-            return;
-        }
-        // 防止重复处理
-        if (room.getPlayer(userId) == null) {
-            return;
-        }
-
-        // 1) 给被踢玩家单独发 playerKicked 事件，前端收到后跳回列表
-        if (sessionManager != null) {
-            Map<String, Object> kickData = new HashMap<>();
-            kickData.put("event", GameActionEnum.PLAYER_KICKED.getCode());
-            kickData.put("roomId", roomId);
-            kickData.put("userId", userId);
-            kickData.put("userName", userName);
-            kickData.put("reason", "准备超时未点击准备，已自动移出房间");
-            sessionManager.sendToUser(userId, buildWsMessage(GameMessageTypeEnum.STATE_UPDATE.getType(), kickData));
-        }
-
-        // 2) 真正踢人（清会话、移玩家、空房删）
-        kickPlayer(roomId, userId);
-
-        // 3) 重新获取最新 roomInfo 广播给其他人
-        GameRoom afterRoom = getRoom(roomId);
-        if (afterRoom != null && sessionManager != null) {
-            Map<String, Object> stateUpdateData = new HashMap<>();
-            stateUpdateData.put("roomInfo", afterRoom.toRoomInfoResp());
-            stateUpdateData.put("players", afterRoom.toRoomInfoResp().getPlayers());
-            stateUpdateData.put("playerCount", afterRoom.getPlayerCount());
-            stateUpdateData.put("event", GameActionEnum.PLAYER_LEAVE.getCode());
-            stateUpdateData.put("playerId", userId);
-            stateUpdateData.put("playerName", userName);
-            sessionManager.broadcastToRoom(afterRoom.getPlayerOrder(),
-                    GameMessageTypeEnum.STATE_UPDATE.getType(), stateUpdateData);
         }
     }
 

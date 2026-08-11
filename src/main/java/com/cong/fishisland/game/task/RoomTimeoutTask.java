@@ -10,19 +10,10 @@ import org.springframework.stereotype.Component;
 /**
  * 房间超时清理任务（斗地主等房间通用）
  *
- * 解决的问题：
- *  - 等待中凑不齐人 → 房间卡着，用户被限制加入其他房间
- *  - 房间满员后长时间没人开始 → 3 人干等
- *  - 准备阶段超时未点准备 → 自动踢人（包括房主）
+ * 统一超时策略：房间创建后 10 分钟未开始游戏则自动解散
+ * 不区分"人不够"和"满员没开始"，统一使用 ROOM_TIMEOUT_MS
  *
- * 处理策略（详见 GameRoomManager.cleanTimeoutRooms）：
- *  - 等待中房间（玩家数 < maxPlayers）空闲 > WAITING_ROOM_TIMEOUT_MS → 解散并广播 roomClosed
- *  - 房间满员后空闲 > ROOM_FULL_NO_START_TIMEOUT_MS 且没人开始 → 解散并广播 roomClosed
- *  - 准备阶段超时未准备 → 踢人（广播 playerKicked / playerLeave）
- *  - 空房间空闲 > WAITING_ROOM_TIMEOUT_MS → 直接删除（无需广播）
- *
- * 游戏中断线 / 全员离线不在本任务范围：单个玩家断线保留在房间等重连，
- * 全员离线时由 removeRoom 自然清理。
+ * 注意：准备超时由前端处理，后端只负责房间级别的超时清理
  */
 @Component
 @Slf4j
@@ -34,7 +25,7 @@ public class RoomTimeoutTask {
     @Scheduled(fixedRate = 5_000L, initialDelay = 5_000L)
     public void cleanTimeoutRooms() {
         try {
-            roomManager.cleanTimeoutRooms(GameConstants.WAITING_ROOM_TIMEOUT_MS);
+            roomManager.cleanTimeoutRooms(GameConstants.ROOM_TIMEOUT_MS);
         } catch (Exception e) {
             log.warn("房间超时清理任务异常", e);
         }

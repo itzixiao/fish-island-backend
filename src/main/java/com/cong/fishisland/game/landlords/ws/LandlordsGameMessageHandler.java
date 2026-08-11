@@ -8,6 +8,8 @@ import com.cong.fishisland.game.landlords.dto.request.RobLandlordReq;
 import com.cong.fishisland.game.landlords.dto.response.GameStateResp;
 import com.cong.fishisland.game.landlords.enums.GamePhaseEnum;
 import com.cong.fishisland.game.landlords.model.poker.Poker;
+import com.cong.fishisland.game.landlords.model.poker.PokerHand;
+import com.cong.fishisland.game.landlords.model.poker.PokerHand;
 import com.cong.fishisland.game.landlords.service.GameBusinessException;
 import com.cong.fishisland.game.landlords.service.LandlordsGameService;
 import com.cong.fishisland.game.manager.GameRoomManager;
@@ -21,6 +23,9 @@ import com.cong.fishisland.game.model.player.GamePlayer;
 import com.cong.fishisland.game.model.room.GameRoom;
 import com.cong.fishisland.game.ws.GameMessageHandler;
 import com.cong.fishisland.model.entity.user.User;
+import com.cong.fishisland.model.ws.response.WSBaseResp;
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONWriter;
 import com.cong.fishisland.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -250,10 +255,11 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
             stateUpdateData.put("roomInfo", room.toRoomInfoResp());
             stateUpdateData.put("players", room.toRoomInfoResp().getPlayers());
             stateUpdateData.put("playerCount", room.getPlayerCount());
-            stateUpdateData.put("phase", GamePhaseEnum.fromRoomState(room.getState()));
+            // 显式由调用方根据业务上下文推导 phase：重连时房间可能处于任何阶段
+            stateUpdateData.put("phase", room.getState() == null ? GamePhaseEnum.WAITING : room.getState().toPhase());
             stateUpdateData.put("roomState", room.getState());
             stateUpdateData.put("event", GameActionEnum.PLAYER_RECONNECT.getCode());
-stateUpdateData.put("reconnectUserId", userId);
+            stateUpdateData.put("reconnectUserId", userId);
 
             // 广播给除重连玩家外的所有玩家
             sessionManager.broadcastToRoomExcept(userId, room.getPlayerOrder(),
@@ -267,9 +273,11 @@ stateUpdateData.put("reconnectUserId", userId);
             stateUpdateData.put("roomInfo", room.toRoomInfoResp());
             stateUpdateData.put("players", room.toRoomInfoResp().getPlayers());
             stateUpdateData.put("playerCount", room.getPlayerCount());
-            stateUpdateData.put("phase", GamePhaseEnum.fromRoomState(room.getState()));
+            // 显式设置 phase：玩家加入时房间处于 WAITING/READY 阶段，phase 仍是 WAITING
+            stateUpdateData.put("phase", GamePhaseEnum.WAITING);
             stateUpdateData.put("roomState", room.getState());
             stateUpdateData.put("event", GameActionEnum.PLAYER_JOIN.getCode());
+            // 注：readyPhaseStartTime 已包含在 roomInfo 中，前端会从中读取
 
             // 广播给除新玩家外的所有玩家
             sessionManager.broadcastToRoomExcept(userId, room.getPlayerOrder(),
@@ -340,7 +348,8 @@ stateUpdateData.put("reconnectUserId", userId);
                             .playerName(playerName)
                             .playerCount(room.getPlayerCount())
                             .roomInfo(room.toRoomInfoResp());
-                    broadcastRoomEvent(room, userId, "playerLeave", eventBuilder.build());
+                    sessionManager.broadcastToRoomExcept(userId, room.getPlayerOrder(),
+                            GameMessageTypeEnum.STATE_UPDATE.getType(), eventBuilder.build());
                 }
             } else {
                 // 等待/准备状态，直接离开房间
@@ -352,7 +361,8 @@ stateUpdateData.put("reconnectUserId", userId);
                             .playerName(playerName)
                             .playerCount(room.getPlayerCount())
                             .roomInfo(room.toRoomInfoResp());
-                    broadcastRoomEvent(room, userId, "playerLeave", eventBuilder.build());
+                    sessionManager.broadcastToRoomExcept(userId, room.getPlayerOrder(),
+                            GameMessageTypeEnum.STATE_UPDATE.getType(), eventBuilder.build());
                 }
             }
         }
@@ -426,15 +436,10 @@ stateUpdateData.put("reconnectUserId", userId);
         // 切换准备状态
         boolean newReadyState = !player.isReady();
         player.setReady(newReadyState);
-        // 标记该玩家的准备超时 deadline 已重置 / 清除
+        // 玩家准备时清空手牌（确保新一局开始时手牌为空）
         if (newReadyState) {
-            room.markPlayerReady(userId);
-        } else {
-            // 取消准备 → 重新进入超时窗口（让所有玩家必须在 READY_TIMEOUT_MS 内完成准备）
-            long now = System.currentTimeMillis();
-            if (room.getReadyPhaseStartTime() > 0L) {
-                room.enterReadyPhase(now);
-            }
+            player.getHand().clear(); // 清空旧手牌
+            player.resetForNewGame(); // 重置地主状态和底牌标记
         }
         // 同步房间状态到 Redis
         roomManager.saveRoom(room);
@@ -479,30 +484,35 @@ stateUpdateData.put("reconnectUserId", userId);
         // 开始游戏（gameService.startGame 内部已统一排序手牌，直接使用）
         GameStateResp gameState = gameService.startGame(room);
 
-        // 给请求者补充手牌（统一排序后设置）
-        GamePlayer player = room.getPlayer(userId);
-        if (player != null && player.getHand() != null && !player.getHand().isEmpty()) {
-            List<Poker> sortedList = new ArrayList<>(player.getHand().getAll());
-            sortedList.sort((a, b) -> {
-                if (a.isUniversal() != b.isUniversal()) return a.isUniversal() ? 1 : -1;
-                return b.getLandlordsSortValue() - a.getLandlordsSortValue();
-            });
-            gameState.setHandCards(GameStateResp.PokerCardVO.fromList(sortedList));
+        // 广播游戏开始（每个玩家发送包含自己手牌的私人消息）
+        for (Long playerId : room.getPlayerOrder()) {
+            GamePlayer p = room.getPlayer(playerId);
+            GameStateResp privateState = GameStateResp.builder()
+                    .roomId(room.getRoomId())
+                    .gameType(room.getGameType())
+                    .roomState(room.getState())
+                    .phase(GamePhaseEnum.ROBBING)
+                    .currentRobPlayerId(room.getCurrentRobPlayerId())
+                    .highestRobScore(room.getHighestRobScore())
+                    .players(gameState.getPlayers())
+                    .build();
+            // 设置该玩家的手牌（排序后设置）
+            if (p != null && p.getHand() != null && !p.getHand().isEmpty()) {
+                privateState.setHandCards(sortAndConvertHand(p.getHand()));
+            }
+            // 包装成 WSBaseResp 并序列化
+            WSBaseResp<GameStateResp> wsResp = WSBaseResp.<GameStateResp>builder()
+                    .type(GameMessageTypeEnum.START_GAME.getType())
+                    .data(privateState)
+                    .build();
+            sessionManager.sendToUser(playerId, JSON.toJSONString(wsResp, JSONWriter.Feature.WriteLongAsString));
         }
 
-        // 广播游戏开始（不含手牌）
-        GameStateResp broadcastState = GameStateResp.builder()
-                .roomId(room.getRoomId())
-                .gameType(room.getGameType())
-                .roomState(room.getState())
-                .phase(GamePhaseEnum.ROBBING)
-                .currentRobPlayerId(room.getCurrentRobPlayerId())
-                .highestRobScore(room.getHighestRobScore())
-                .players(gameState.getPlayers())
-                .build();
-
-        sessionManager.broadcastToRoom(room.getPlayerOrder(),
-                GameMessageTypeEnum.START_GAME.getType(), broadcastState);
+        // 给请求者补充手牌（用于同步响应）
+        GamePlayer player = room.getPlayer(userId);
+        if (player != null && player.getHand() != null && !player.getHand().isEmpty()) {
+            gameState.setHandCards(sortAndConvertHand(player.getHand()));
+        }
 
         return GameMessageResult.success(GameMessageTypeEnum.START_GAME.getType(), gameState);
     }
@@ -715,14 +725,6 @@ stateUpdateData.put("reconnectUserId", userId);
     }
 
     /**
-     * 广播房间事件
-     */
-    private void broadcastRoomEvent(GameRoom room, Long excludeUserId, String event, Object data) {
-        sessionManager.broadcastToRoomExcept(excludeUserId, room.getPlayerOrder(),
-                GameMessageTypeEnum.STATE_UPDATE.getType(), data);
-    }
-
-    /**
      * 广播玩家状态变化（在线/离线）
      */
     private void broadcastPlayerStatusChange(GameRoom room, Long userId, PlayerStatusEnum status) {
@@ -754,5 +756,20 @@ stateUpdateData.put("reconnectUserId", userId);
         }
 
         return userInfo;
+    }
+
+    /**
+     * 排序扑克牌列表（斗地主规则：万能牌放最后，其他按点数降序）
+     */
+    private List<GameStateResp.PokerCardVO> sortAndConvertHand(PokerHand hand) {
+        if (hand == null || hand.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<Poker> sortedList = new ArrayList<>(hand.getAll());
+        sortedList.sort((a, b) -> {
+            if (a.isUniversal() != b.isUniversal()) return a.isUniversal() ? 1 : -1;
+            return b.getLandlordsSortValue() - a.getLandlordsSortValue();
+        });
+        return GameStateResp.PokerCardVO.fromList(sortedList);
     }
 }

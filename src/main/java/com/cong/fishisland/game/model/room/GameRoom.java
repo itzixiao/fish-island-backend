@@ -1,7 +1,6 @@
 package com.cong.fishisland.game.model.room;
 
 import com.alibaba.fastjson2.annotation.JSONField;
-import com.cong.fishisland.game.constant.GameConstants;
 import com.cong.fishisland.game.enums.GameTypeEnum;
 import com.cong.fishisland.game.enums.PlayerRoleEnum;
 import com.cong.fishisland.game.enums.RoomStateEnum;
@@ -163,54 +162,21 @@ public class GameRoom {
     private boolean showIP;
 
     /**
-     * 创建时间
-     */
-    private long createTime;
-
-    /**
-     * 最后活跃时间
-     * 用于房间清理任务判断空闲超时
-     */
-    private long lastActiveTime;
-
-    /**
      * 游戏开始时间
      */
     private long gameStartTime;
 
     /**
+     * 房间创建时间（用于超时判断）
+     */
+    private long createTime;
+
+    /**
      * 当前准备阶段开始时间（毫秒）
      * 一局结束 / 房间凑齐人后会重新设置；为 0 表示不在准备阶段
-     * 用于：
-     *  - 满员但没人开始 → 超时解散
-     *  - 准备阶段超时踢人
+     * 注意：准备超时由前端处理，后端只记录开始时间
      */
     private long readyPhaseStartTime;
-
-    /**
-     * 满员时间（毫秒）：房间达到 maxPlayers 的时刻
-     * 为 0 表示当前未满员
-     * 满员后超过 ROOM_FULL_NO_START_TIMEOUT_MS 未开始即解散
-     */
-    private long fullSinceTime;
-
-    /**
-     * 玩家最后准备时间（毫秒）
-     * 用于准备超时判断：每个玩家需要在该时间 + READY_TIMEOUT_MS 内点击准备
-     */
-    @JSONField(serialize = false)
-    private Map<Long, Long> playerLastReadyDeadline;
-
-    /**
-     * 获取 playerLastReadyDeadline（懒加载，避免反序列化后为 null）
-     */
-    @JSONField(serialize = false)
-    public Map<Long, Long> getPlayerLastReadyDeadline() {
-        if (playerLastReadyDeadline == null) {
-            playerLastReadyDeadline = new ConcurrentHashMap<>();
-        }
-        return playerLastReadyDeadline;
-    }
 
     /**
      * 获取玩家顺序列表
@@ -231,7 +197,6 @@ public class GameRoom {
         this.robbedPlayers = new HashSet<>();
         this.passedRobPlayers = new HashSet<>();
         this.createTime = System.currentTimeMillis();
-        this.lastActiveTime = this.createTime;
     }
 
     public GameRoom(String roomId, GameTypeEnum gameType, Long ownerId) {
@@ -263,19 +228,6 @@ public class GameRoom {
             playerOrder.add(player.getUserId());
         }
         currentPlayers = players.size();
-
-        // 房间刚刚凑满，记录满员时间戳，用于"满员超时未开始"判断
-        if (currentPlayers == maxPlayers && fullSinceTime == 0L) {
-            fullSinceTime = System.currentTimeMillis();
-        }
-
-        // 如果房间已处于准备阶段（如一局刚结束），新加入的玩家必须同样在 READY_TIMEOUT_MS 内点击准备
-        if (readyPhaseStartTime > 0L && !player.isReady()) {
-            getPlayerLastReadyDeadline().put(
-                    player.getUserId(),
-                    readyPhaseStartTime + GameConstants.READY_TIMEOUT_MS);
-        }
-        updateLastActiveTime();
         return true;
     }
 
@@ -302,8 +254,6 @@ public class GameRoom {
         }
 
         playerOrder.remove(userId);
-        // 清理该玩家的准备超时跟踪
-        getPlayerLastReadyDeadline().remove(userId);
 
         // 如果是房主，转移给下一个玩家
         if (ownerId.equals(userId) && !playerOrder.isEmpty()) {
@@ -316,11 +266,6 @@ public class GameRoom {
         }
 
         currentPlayers = players.size();
-        // 离开后未满员，重置满员时间
-        if (currentPlayers < maxPlayers) {
-            fullSinceTime = 0L;
-        }
-        updateLastActiveTime();
         return true;
     }
 
@@ -485,36 +430,11 @@ public class GameRoom {
     }
 
     /**
-     * 更新最后活跃时间
-     */
-    public void updateLastActiveTime() {
-        this.lastActiveTime = System.currentTimeMillis();
-    }
-
-    /**
      * 标记进入准备阶段：所有玩家需重新点击准备
-     * 一局结束后或房间刚满员时调用
+     * 注意：准备超时由前端处理，后端只记录开始时间
      */
     public void enterReadyPhase(long now) {
         this.readyPhaseStartTime = now;
-        // 重新设置每个未准备的玩家 deadline：现在 + READY_TIMEOUT_MS
-        long deadline = now + GameConstants.READY_TIMEOUT_MS;
-        Map<Long, Long> map = getPlayerLastReadyDeadline();
-        for (GamePlayer player : getAllPlayers()) {
-            if (!player.isReady()) {
-                map.put(player.getUserId(), deadline);
-            } else {
-                map.remove(player.getUserId());
-            }
-        }
-    }
-
-    /**
-     * 标记玩家已点击准备，清除其超时 deadline
-     */
-    public void markPlayerReady(Long userId) {
-        getPlayerLastReadyDeadline().remove(userId);
-        updateLastActiveTime();
     }
 
     /**
@@ -522,41 +442,6 @@ public class GameRoom {
      */
     public void exitReadyPhase() {
         this.readyPhaseStartTime = 0L;
-        Map<Long, Long> map = getPlayerLastReadyDeadline();
-        map.clear();
-    }
-
-    /**
-     * 获取准备超时的玩家ID（未点准备且已超过 READY_TIMEOUT_MS）
-     */
-    public List<Long> getReadyTimeoutPlayers(long now) {
-        if (readyPhaseStartTime == 0L) {
-            return Collections.emptyList();
-        }
-        List<Long> result = new ArrayList<>();
-        for (Map.Entry<Long, Long> entry : getPlayerLastReadyDeadline().entrySet()) {
-            if (now >= entry.getValue()) {
-                result.add(entry.getKey());
-            }
-        }
-        return result;
-    }
-
-    /**
-     * 获取剩余时间 <= warnMs 的未准备玩家（用于触发前端"即将踢出"提示）
-     */
-    public List<Long> getReadyWarnPlayers(long now, long warnMs) {
-        if (readyPhaseStartTime == 0L) {
-            return Collections.emptyList();
-        }
-        long threshold = now + warnMs;
-        List<Long> result = new ArrayList<>();
-        for (Map.Entry<Long, Long> entry : getPlayerLastReadyDeadline().entrySet()) {
-            if (entry.getValue() <= threshold) {
-                result.add(entry.getKey());
-            }
-        }
-        return result;
     }
 
     /**
@@ -614,6 +499,7 @@ public class GameRoom {
                 .maxPlayers(maxPlayers)
                 .needPassword(needPassword)
                 .players(playerList)
+                .readyPhaseStartTime(readyPhaseStartTime > 0 ? readyPhaseStartTime : null)
                 .build();
     }
 }
