@@ -346,13 +346,14 @@ public class GameRoomManager {
     }
 
     /**
-     * 按游戏类型获取房间列表
+     * 按游戏类型获取房间列表（包含所有游戏阶段：等待、准备、叫地主、游戏中的房间）
      */
     public List<GameRoom> getRoomsByType(GameTypeEnum gameType) {
         return roomCache.getRoomsByType(gameType).stream()
                 .filter(r -> r.getState() == RoomStateEnum.WAITING
                         || r.getState() == RoomStateEnum.READY
-                        || r.getState() == RoomStateEnum.ROBBING)
+                        || r.getState() == RoomStateEnum.ROBBING
+                        || r.getState() == RoomStateEnum.PLAYING)
                 .sorted(Comparator.comparing(GameRoom::getCreateTime).reversed())
                 .collect(Collectors.toList());
     }

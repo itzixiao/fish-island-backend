@@ -673,6 +673,9 @@ public class LandlordsGameService implements GameService {
             player.setReady(false);
             player.setRobScore(0);
             player.setCurrentPlayedCards(null);
+            // 清除AI托管状态，确保新的一局不会有残留的托管状态
+            player.setRobotControlled(false);
+            player.setRobotReason(null);
             // 不清空手牌！
         }
 
