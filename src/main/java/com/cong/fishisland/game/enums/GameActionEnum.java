@@ -47,6 +47,7 @@ public enum GameActionEnum {
     PLAYER_LEAVE("playerLeave", "玩家离开", "房间事件"),
     PLAYER_STATUS_CHANGE("playerStatusChange", "玩家状态变化", "房间事件"),
     PLAYER_RECONNECT("playerReconnect", "玩家重连", "房间事件"),
+    PLAYER_KICKED("playerKicked", "玩家被踢出", "房间事件"),
 
     // ==================== AI托管 ====================
     ROBOT("ROBOT", "AI托管", "AI托管"),
@@ -89,7 +90,9 @@ public enum GameActionEnum {
      * 是否是房间事件
      */
     public boolean isRoomEvent() {
-        return this == PLAYER_JOIN || this == PLAYER_LEAVE || this == PLAYER_STATUS_CHANGE || this == PLAYER_RECONNECT;
+        return this == PLAYER_JOIN || this == PLAYER_LEAVE
+                || this == PLAYER_STATUS_CHANGE || this == PLAYER_RECONNECT
+                || this == PLAYER_KICKED;
     }
 
     /**

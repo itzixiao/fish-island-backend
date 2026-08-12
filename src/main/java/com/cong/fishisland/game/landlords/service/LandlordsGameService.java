@@ -68,6 +68,9 @@ public class LandlordsGameService implements GameService {
     public GameStateResp startGame(GameRoom room) {
         validatePlayerCount(room);
 
+        // 开始游戏，退出准备阶段（清除准备超时跟踪）
+        room.exitReadyPhase();
+
         // 更新房间状态
         room.setState(RoomStateEnum.DISTRIBUTING);
 
@@ -98,7 +101,6 @@ public class LandlordsGameService implements GameService {
         room.setRobRoundStartPlayerId(firstRobPlayerId);
         room.setLastRobPlayerId(null);
         room.setState(RoomStateEnum.ROBBING);
-        room.updateLastActiveTime();
 
         // 同步房间状态到 Redis
         roomManager.saveRoom(room);
@@ -217,23 +219,7 @@ public class LandlordsGameService implements GameService {
         // 发送私人状态
         sendPrivateState(room, player, userId);
 
-        // 切换到下一个玩家
-        Long nextPlayerId = room.getNextPlayerId(userId);
-        room.setCurrentPlayerId(nextPlayerId);
-
-        // 广播游戏状态（让所有玩家看到当前出的牌）
-        broadcastGameState(room, null);
-
-        // 判断下一个玩家是否可以不出（需要检查上家是否出过牌）
-        boolean canPass = room.getLastPlayerId() != null && !room.getLastPlayerId().equals(nextPlayerId);
-
-        // 广播下一个出牌回合通知（内部已处理超时和托管逻辑）
-        broadcastPlayTurnNotify(room, nextPlayerId, canPass);
-
-        // 同步房间状态到 Redis
-        roomManager.saveRoom(room);
-
-        return buildGameState(room, null);
+        return advanceToNextPlayer(room, userId);
     }
 
     @Override
@@ -267,27 +253,11 @@ public class LandlordsGameService implements GameService {
             room.setLastPlayedCards(new PokerHand());
             room.setLastPlayerId(null);
             // 清除所有玩家的当前出牌
-            room.getOrderedPlayers().forEach(p -> p.clearCurrentPlayedCards());
+            room.getOrderedPlayers().forEach(GamePlayer::clearCurrentPlayedCards);
         }
         // 如果不是一轮结束，不清除，下次出牌直接覆盖
 
-        // 切换到下一个玩家
-        Long nextPlayerId = room.getNextPlayerId(userId);
-        room.setCurrentPlayerId(nextPlayerId);
-
-        // 广播游戏状态
-        broadcastGameState(room, null);
-
-        // 判断下一个玩家是否可以不出
-        boolean canPass = room.getLastPlayerId() != null && !room.getLastPlayerId().equals(nextPlayerId);
-
-        // 广播下一个出牌回合通知（内部已处理超时和托管逻辑）
-        broadcastPlayTurnNotify(room, nextPlayerId, canPass);
-
-        // 同步房间状态到 Redis
-        roomManager.saveRoom(room);
-
-        return buildGameState(room, null);
+        return advanceToNextPlayer(room, userId);
     }
 
     @Override
@@ -505,7 +475,7 @@ public class LandlordsGameService implements GameService {
      */
     private void determineLandlordInternal(GameRoom room, Long landlordId) {
 
-        // 设置地主
+        // 设置地主（内部已处理底牌添加）
         room.setLandlord(landlordId);
         room.setState(RoomStateEnum.PLAYING);
         room.setCurrentPlayerId(landlordId);
@@ -541,7 +511,7 @@ public class LandlordsGameService implements GameService {
      */
     private GameStateResp determineLandlord(GameRoom room, Long landlordId) {
 
-        // 设置地主
+        // 设置地主（内部已处理底牌添加）
         room.setLandlord(landlordId);
         room.setState(RoomStateEnum.PLAYING);
         room.setCurrentPlayerId(landlordId);
@@ -638,6 +608,8 @@ public class LandlordsGameService implements GameService {
         resetData.put("playerCount", room.getPlayerCount());
         resetData.put("roomState", RoomStateEnum.WAITING);
         resetData.put("phase", GamePhaseEnum.WAITING);
+        // 进入准备阶段，把准备阶段开始时间广播给客户端，让前端可以本地倒计时
+        resetData.put("readyPhaseStartTime", room.getReadyPhaseStartTime());
         sessionManager.broadcastToRoom(room.getPlayerOrder(),
                 GameMessageTypeEnum.STATE_UPDATE.getType(), resetData);
 
@@ -658,6 +630,8 @@ public class LandlordsGameService implements GameService {
 
         // 设置房间状态为结束
         room.setState(RoomStateEnum.ENDING);
+        // 退出准备阶段，避免玩家被踢
+        room.exitReadyPhase();
 
         // 取消所有机器人的托管
         for (GamePlayer player : room.getOrderedPlayers()) {
@@ -665,6 +639,9 @@ public class LandlordsGameService implements GameService {
                 player.setRobotControlled(false);
             }
         }
+
+        // 清空底牌
+        room.setBottomCards(null);
 
         // 广播强制结束消息
         ActionResultResp actionResult = ActionResultResp.builder()
@@ -684,18 +661,22 @@ public class LandlordsGameService implements GameService {
 
     /**
      * 重置房间为等待状态，准备下一局
+     * 注意：不清空手牌，让玩家能看到上一局的结算画面
      */
     public void resetRoomForNewRound(GameRoom room) {
 
         // 重置房间状态为等待
         room.setState(RoomStateEnum.WAITING);
 
-        // 清空所有玩家的准备状态
+        // 清空准备状态（但保留手牌，让玩家能看到结算画面）
         for (GamePlayer player : room.getOrderedPlayers()) {
             player.setReady(false);
             player.setRobScore(0);
             player.setCurrentPlayedCards(null);
-            // 如果玩家离线但还在房间，保持离线状态
+            // 清除AI托管状态，确保新的一局不会有残留的托管状态
+            player.setRobotControlled(false);
+            player.setRobotReason(null);
+            // 不清空手牌！
         }
 
         // 重置游戏相关字段
@@ -715,49 +696,26 @@ public class LandlordsGameService implements GameService {
             room.getPassedRobPlayers().clear();
         }
 
+        // 进入准备阶段：设置开始时间，让前端开始倒计时
+        room.enterReadyPhase(System.currentTimeMillis());
+
     }
 
     /**
-     * 构建玩家结果列表
+     * 推进到下一个玩家：切换当前玩家、广播状态、广播回合通知、持久化并返回最新游戏状态。
+     * <p>用于出牌和不出两类操作的统一收尾，避免两处流程出现漂移。
      */
-    private List<GameStateResp.PlayerResultVO> buildPlayerResults(GameRoom room, Long winnerId) {
-        return room.getOrderedPlayers().stream()
-                .map(p -> GameStateResp.PlayerResultVO.builder()
-                        .userId(p.getUserId())
-                        .userName(p.getUserName())
-                        .isWinner(p.getUserId().equals(winnerId))
-                        .isLandlord(p.isLandlord())
-                        .build())
-                .collect(Collectors.toList());
-    }
+    private GameStateResp advanceToNextPlayer(GameRoom room, Long currentUserId) {
+        Long nextPlayerId = room.getNextPlayerId(currentUserId);
+        room.setCurrentPlayerId(nextPlayerId);
 
-    /**
-     * 重置房间状态
-     *
-     * @param winnerId  赢家ID，保留其最后出牌
-     * @param lastCards 赢家最后出的牌
-     */
-    private void resetRoomState(GameRoom room, Long winnerId, PokerHand lastCards) {
-        room.setState(RoomStateEnum.WAITING);
-        room.setLandlordId(null);
-        room.setCurrentPlayerId(null);
-        room.setLastPlayerId(null);
-        room.setBottomCards(new PokerHand());
+        broadcastGameState(room, null);
 
-        for (GamePlayer player : room.getOrderedPlayers()) {
-            player.setReady(false);
-            player.setFinished(false);
+        boolean canPass = room.getLastPlayerId() != null && !room.getLastPlayerId().equals(nextPlayerId);
+        broadcastPlayTurnNotify(room, nextPlayerId, canPass);
 
-            if (player.getUserId().equals(winnerId)) {
-                // 赢家：手牌清空，保留最后出牌
-                player.getHand().clear();
-                // lastCards 已在 handleGameOver 中设置到 room，player 的 currentPlayedCards 也保留
-            } else {
-                // 其他玩家：清空手牌和出牌
-                player.getHand().clear();
-                player.clearCurrentPlayedCards();
-            }
-        }
+        roomManager.saveRoom(room);
+        return buildGameState(room, null);
     }
 
     // ==================== 状态构建方法 ====================
@@ -775,7 +733,7 @@ public class LandlordsGameService implements GameService {
 
         // 构建底牌（游戏开始后所有人都能看到）
         List<GameStateResp.PokerCardVO> bottomCards = null;
-        if (room.getLandlordId() != null) {
+        if (room.getLandlordId() != null && room.getBottomCards() != null) {
             bottomCards = GameStateResp.PokerCardVO.fromList(room.getBottomCards().getAll());
         }
 
@@ -800,15 +758,6 @@ public class LandlordsGameService implements GameService {
             lastPatternDesc = PokerComparator.getPatternDescription(PokerPatternMatcher.analyze(lastPlayedCards));
         }
 
-        // 获取当前叫分
-        Integer currentRobScore = null;
-        if (room.getCurrentRobPlayerId() != null) {
-            GamePlayer robPlayer = room.getPlayer(room.getCurrentRobPlayerId());
-            if (robPlayer != null) {
-                currentRobScore = robPlayer.getRobScore();
-            }
-        }
-
         // 构建私人手牌（统一排序后再推送）
         List<GameStateResp.PokerCardVO> handCards = null;
         if (viewerId != null) {
@@ -824,7 +773,7 @@ public class LandlordsGameService implements GameService {
                 .roomId(room.getRoomId())
                 .gameType(room.getGameType())
                 .roomState(room.getState())
-                .phase(GamePhaseEnum.fromRoomState(room.getState()))
+                .phase(room.getState() == null ? GamePhaseEnum.WAITING : room.getState().toPhase())
                 .ownerId(room.getOwnerId())
                 .landlordId(room.getLandlordId())
                 .bottomCards(bottomCards)
@@ -837,12 +786,15 @@ public class LandlordsGameService implements GameService {
                 .lastPlayerName(lastPlayerName)
                 .lastPatternDesc(lastPatternDesc)
                 .handCards(handCards)
+                // 准备阶段信息：让前端在 ready 阶段能展示倒计时
+                .readyPhaseStartTime(room.getReadyPhaseStartTime() > 0L ? room.getReadyPhaseStartTime() : null)
                 .build();
     }
 
     /**
      * 构建玩家状态列表
      * 注意：只有 viewerId 匹配的玩家才返回手牌，且手牌统一排序后返回
+     * 当 viewerId 为 null 时，返回所有玩家的手牌（用于广播消息）
      */
     private List<GameStateResp.PlayerStateVO> buildPlayerStates(GameRoom room, Long viewerId) {
         return room.getOrderedPlayers().stream()
@@ -863,10 +815,13 @@ public class LandlordsGameService implements GameService {
                             .currentPlayedCards(GameStateResp.PokerCardVO.fromList(p.getCurrentPlayedCards()));
 
                     // 只给拥有者显示手牌，且统一排序
-                    if (p.getUserId().equals(viewerId)) {
-                        PokerHand sortedHand = new PokerHand(p.getHand().getAll());
-                        PokerSorter.sortByLandlordsWithUniversal(sortedHand);
-                        builder.cards(GameStateResp.PokerCardVO.fromList(sortedHand.getAll()));
+                    // 当 viewerId 为 null 时，返回所有玩家的手牌
+                    if (viewerId == null || p.getUserId().equals(viewerId)) {
+                        if (p.getHand() != null && !p.getHand().isEmpty()) {
+                            PokerHand sortedHand = new PokerHand(p.getHand().getAll());
+                            PokerSorter.sortByLandlordsWithUniversal(sortedHand);
+                            builder.cards(GameStateResp.PokerCardVO.fromList(sortedHand.getAll()));
+                        }
                     }
 
                     return builder.build();
@@ -983,7 +938,7 @@ public class LandlordsGameService implements GameService {
 
         ActionResultResp actionResult = ActionResultResp.builder()
                 .event(event.getCode())
-                .phase(GamePhaseEnum.fromRoomState(room.getState()))
+                .phase(room.getState() == null ? GamePhaseEnum.WAITING : room.getState().toPhase())
                 .roomState(room.getState())
                 .playerId(player.getUserId())
                 .playerName(player.getUserName())

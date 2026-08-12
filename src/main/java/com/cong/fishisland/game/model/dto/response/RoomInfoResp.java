@@ -55,4 +55,10 @@ public class RoomInfoResp {
      * 玩家列表
      */
     private List<PlayerInfoResp> players;
+
+    /**
+     * 准备阶段开始时间戳（毫秒），用于前端显示倒计时
+     * 0 表示未进入准备阶段
+     */
+    private Long readyPhaseStartTime;
 }

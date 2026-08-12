@@ -1,7 +1,11 @@
 package com.cong.fishisland.game.manager;
 
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONWriter;
 import com.cong.fishisland.game.cache.GameRoomRedisCache;
 import com.cong.fishisland.game.cache.GameSessionRedisCache;
+import com.cong.fishisland.game.constant.GameConstants;
+import com.cong.fishisland.game.enums.GameActionEnum;
 import com.cong.fishisland.game.enums.GameMessageTypeEnum;
 import com.cong.fishisland.game.enums.GameTypeEnum;
 import com.cong.fishisland.game.enums.RoomStateEnum;
@@ -174,6 +178,11 @@ public class GameRoomManager {
             if (!room.addPlayer(player)) {
                 return null;
             }
+
+            // 新玩家加入后，检查房间是否已满，满则启动准备超时
+            if (room.getPlayerCount() >= room.getMaxPlayers()) {
+                room.enterReadyPhase(System.currentTimeMillis());
+            }
         } else {
             // 重连：恢复玩家在线状态
             player.setOnline(true);
@@ -337,13 +346,14 @@ public class GameRoomManager {
     }
 
     /**
-     * 按游戏类型获取房间列表
+     * 按游戏类型获取房间列表（包含所有游戏阶段：等待、准备、叫地主、游戏中的房间）
      */
     public List<GameRoom> getRoomsByType(GameTypeEnum gameType) {
         return roomCache.getRoomsByType(gameType).stream()
                 .filter(r -> r.getState() == RoomStateEnum.WAITING
                         || r.getState() == RoomStateEnum.READY
-                        || r.getState() == RoomStateEnum.ROBBING)
+                        || r.getState() == RoomStateEnum.ROBBING
+                        || r.getState() == RoomStateEnum.PLAYING)
                 .sorted(Comparator.comparing(GameRoom::getCreateTime).reversed())
                 .collect(Collectors.toList());
     }
@@ -391,15 +401,16 @@ public class GameRoomManager {
     }
 
     /**
-     * 清理超时房间
-     * 规则：
-     * - 房间没人（玩家数 = 0）且 lastActiveTime 超时 → 删除
-     * - 等待中房间（WAITING/READY）玩家数 < 最大人数 且 长时间未开始 → 解散并通知
+     * 清理超时房间（统一超时策略）
      *
-     * 注：游戏中玩家断线 / 全员离线 不在此处理 —— 房间内全部离线时 removeRoom 自然会被触发；
-     * 单人断线时仍保留在房间，等玩家重连。
+     * 规则：
+     * - 房间没人（玩家数 = 0）且 createTime 超时 → 删除
+     * - 等待中房间（WAITING/READY）createTime 超时 → 解散并通知
+     * - 游戏进行中的房间不清理（游戏时间可能很长）
+     *
+     * 注意：准备超时由前端处理，后端不处理单个玩家的准备超时
      */
-    public void cleanTimeoutRooms(long waitingTimeoutMs) {
+    public void cleanTimeoutRooms(long roomTimeoutMs) {
         long now = System.currentTimeMillis();
         Set<String> roomIds = roomCache.getAllRoomIds();
 
@@ -409,21 +420,36 @@ public class GameRoomManager {
                 continue;
             }
 
+            // 游戏进行中的房间不清理
+            if (room.getState().isPlaying()) {
+                continue;
+            }
+
             // 规则 A：房间没人 + 超时（无广播，直接删即可）
-            if (room.getPlayerCount() == 0 && now - room.getLastActiveTime() > waitingTimeoutMs) {
+            if (room.getPlayerCount() == 0 && now - room.getCreateTime() > roomTimeoutMs) {
                 log.info("房间[{}]无玩家超时，自动删除", roomId);
                 removeRoom(roomId);
                 continue;
             }
 
-            // 规则 B：等待中但凑不齐人 + 超时（解散并广播 roomClosed）
+            // 规则 B：等待中房间 createTime 超时 → 解散并广播 roomClosed
             boolean isWaiting = room.getState() == RoomStateEnum.WAITING || room.getState() == RoomStateEnum.READY;
-            if (isWaiting && room.getPlayerCount() < room.getMaxPlayers()
-                    && now - room.getLastActiveTime() > waitingTimeoutMs) {
-                log.info("房间[{}]等待中超时（凑不齐人），自动解散", roomId);
-                forceCloseRoom(roomId, "房间长时间未开始，已自动解散");
+            if (isWaiting && now - room.getCreateTime() > roomTimeoutMs) {
+                log.info("房间[{}]超时未开始游戏，自动解散", roomId);
+                forceCloseRoom(roomId, "房间超时未开始游戏，已自动解散");
+                continue;
             }
         }
+    }
+
+    /**
+     * 构造 WS 消息 JSON
+     */
+    private String buildWsMessage(String type, Object data) {
+        Map<String, Object> wsBaseResp = new HashMap<>();
+        wsBaseResp.put("type", type);
+        wsBaseResp.put("data", data);
+        return JSON.toJSONString(wsBaseResp, JSONWriter.Feature.WriteLongAsString);
     }
 
     /**

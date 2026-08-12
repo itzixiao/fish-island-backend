@@ -3,7 +3,6 @@ package com.cong.fishisland.game.landlords.dto.response;
 import com.cong.fishisland.game.landlords.enums.GamePhaseEnum;
 import com.cong.fishisland.game.enums.GameTypeEnum;
 import com.cong.fishisland.game.enums.RoomStateEnum;
-import com.cong.fishisland.game.model.player.GamePlayer;
 import com.cong.fishisland.game.landlords.model.poker.Poker;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -108,6 +107,14 @@ public class GameStateResp {
      * 最近出牌牌型描述
      */
     private String lastPatternDesc;
+
+    // ==================== 准备阶段信息 ====================
+
+    /**
+     * 当前准备阶段开始时间（毫秒）
+     * 0 表示不在准备阶段；用于前端本地计算 ready 倒计时
+     */
+    private Long readyPhaseStartTime;
 
     // ==================== 玩家信息 ====================
 
@@ -220,34 +227,6 @@ public class GameStateResp {
         private String role;
         private List<PokerCardVO> cards;
         private List<PokerCardVO> currentPlayedCards;
-
-        public static PlayerStateVO from(GamePlayer player, Long currentPlayerId, Long currentRobPlayerId) {
-            // 手牌排序（统一按斗地主规则：非癞子按降序，癞子排最后）
-            List<Poker> sortedCards = null;
-            if (player.getHand() != null && !player.getHand().isEmpty()) {
-                sortedCards = new ArrayList<>(player.getHand().getAll());
-                sortedCards.sort((a, b) -> {
-                    if (a.isUniversal() != b.isUniversal()) return a.isUniversal() ? 1 : -1;
-                    return b.getLandlordsSortValue() - a.getLandlordsSortValue();
-                });
-            }
-            return PlayerStateVO.builder()
-                    .userId(player.getUserId())
-                    .userName(player.getUserName())
-                    .avatar(player.getAvatar())
-                    .cardCount(player.getCardCount())
-                    .isLandlord(player.isLandlord())
-                    .isCurrentPlayer(player.getUserId().equals(currentPlayerId))
-                    .isCurrentRobPlayer(player.getUserId().equals(currentRobPlayerId))
-                    .isReady(player.isReady())
-                    .isOnline(player.isOnline())
-                    .isRobotControlled(player.isRobotControlled())
-                    .robScore(player.getRobScore())
-                    .role(player.getRole() != null ? player.getRole().name() : "PLAYER")
-                    .cards(sortedCards != null ? PokerCardVO.fromList(sortedCards) : null)
-                    .currentPlayedCards(player.getCurrentPlayedCards() != null ? PokerCardVO.fromList(player.getCurrentPlayedCards()) : new ArrayList<>())
-                    .build();
-        }
     }
 
     /**

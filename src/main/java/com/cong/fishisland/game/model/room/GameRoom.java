@@ -162,19 +162,21 @@ public class GameRoom {
     private boolean showIP;
 
     /**
-     * 创建时间
+     * 游戏开始时间
+     */
+    private long gameStartTime;
+
+    /**
+     * 房间创建时间（用于超时判断）
      */
     private long createTime;
 
     /**
-     * 最后活跃时间
+     * 当前准备阶段开始时间（毫秒）
+     * 一局结束 / 房间凑齐人后会重新设置；为 0 表示不在准备阶段
+     * 注意：准备超时由前端处理，后端只记录开始时间
      */
-    private long lastActiveTime;
-
-    /**
-     * 游戏开始时间
-     */
-    private long gameStartTime;
+    private long readyPhaseStartTime;
 
     /**
      * 获取玩家顺序列表
@@ -195,7 +197,6 @@ public class GameRoom {
         this.robbedPlayers = new HashSet<>();
         this.passedRobPlayers = new HashSet<>();
         this.createTime = System.currentTimeMillis();
-        this.lastActiveTime = this.createTime;
     }
 
     public GameRoom(String roomId, GameTypeEnum gameType, Long ownerId) {
@@ -227,7 +228,6 @@ public class GameRoom {
             playerOrder.add(player.getUserId());
         }
         currentPlayers = players.size();
-        updateLastActiveTime();
         return true;
     }
 
@@ -266,7 +266,6 @@ public class GameRoom {
         }
 
         currentPlayers = players.size();
-        updateLastActiveTime();
         return true;
     }
 
@@ -390,8 +389,11 @@ public class GameRoom {
         GamePlayer newLandlord = players.get(userId);
         if (newLandlord != null) {
             newLandlord.setAsLandlord();
-            // 添加底牌
-            newLandlord.getHand().addAll(bottomCards.getAll());
+            // 添加底牌（检查是否已添加，防止重复）
+            if (!newLandlord.isBottomCardsAdded() && bottomCards != null && !bottomCards.isEmpty()) {
+                newLandlord.getHand().addAll(bottomCards.getAll());
+                newLandlord.markBottomCardsAdded();
+            }
         }
     }
 
@@ -428,10 +430,18 @@ public class GameRoom {
     }
 
     /**
-     * 更新最后活跃时间
+     * 标记进入准备阶段：所有玩家需重新点击准备
+     * 注意：准备超时由前端处理，后端只记录开始时间
      */
-    public void updateLastActiveTime() {
-        this.lastActiveTime = System.currentTimeMillis();
+    public void enterReadyPhase(long now) {
+        this.readyPhaseStartTime = now;
+    }
+
+    /**
+     * 退出准备阶段（开始游戏 / 解散房间）
+     */
+    public void exitReadyPhase() {
+        this.readyPhaseStartTime = 0L;
     }
 
     /**
@@ -489,6 +499,7 @@ public class GameRoom {
                 .maxPlayers(maxPlayers)
                 .needPassword(needPassword)
                 .players(playerList)
+                .readyPhaseStartTime(readyPhaseStartTime > 0 ? readyPhaseStartTime : null)
                 .build();
     }
 }

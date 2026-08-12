@@ -1,6 +1,5 @@
 package com.cong.fishisland.game.landlords.enums;
 
-import com.cong.fishisland.game.enums.RoomStateEnum;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
@@ -110,57 +109,4 @@ public enum GamePhaseEnum {
         return this == PLAYING;
     }
 
-    /**
-     * 获取对应的房间状态 - 已废弃
-     * <p>房间状态由各业务层自行维护，phase/state 由业务根据上下文填充，
-     * 不再通过枚举互转方法隐式决定，避免两个枚举字段互相耦合。
-     * @deprecated since 0.2：phase 与 roomState 在 DTO 层并存，由调用方显式设置。
-     */
-    @Deprecated
-    public RoomStateEnum toRoomState() {
-        switch (this) {
-            case WAITING:
-                return RoomStateEnum.WAITING;
-            case DEALING:
-                return RoomStateEnum.DISTRIBUTING;
-            case ROBBING:
-                return RoomStateEnum.ROBBING;
-            case PLAYING:
-                return RoomStateEnum.PLAYING;
-            case ENDING:
-                return RoomStateEnum.ENDING;
-            case CLOSED:
-                return RoomStateEnum.CLOSED;
-            default:
-                return RoomStateEnum.WAITING;
-        }
-    }
-
-    /**
-     * 从房间状态获取游戏阶段 - 已废弃
-     * <p>见 {@link #toRoomState()}。
-     * @deprecated since 0.2：phase 与 roomState 由调用方显式设置。
-     */
-    @Deprecated
-    public static GamePhaseEnum fromRoomState(RoomStateEnum state) {
-        if (state == null) {
-            return WAITING;
-        }
-        switch (state) {
-            case DISTRIBUTING:
-                return DEALING;
-            case ROBBING:
-                return ROBBING;
-            case PLAYING:
-                return PLAYING;
-            case ENDING:
-                return ENDING;
-            case CLOSED:
-                return CLOSED;
-            case WAITING:
-            case READY:
-            default:
-                return WAITING;
-        }
-    }
 }
