@@ -1,8 +1,8 @@
 package com.cong.fishisland.game.service;
 
-import com.cong.fishisland.game.enums.GameTypeEnum;
-import com.cong.fishisland.game.landlords.dto.response.GameStateResp;
-import com.cong.fishisland.game.model.room.GameRoom;
+import com.cong.fishisland.game.common.enums.GameTypeEnum;
+import com.cong.fishisland.game.common.model.room.GameRoom;
+import com.cong.fishisland.game.framework.landlords.dto.response.GameStateResp;
 
 import java.util.List;
 

@@ -1,7 +1,7 @@
 package com.cong.fishisland.game.task;
 
-import com.cong.fishisland.game.constant.GameConstants;
-import com.cong.fishisland.game.manager.GameRoomManager;
+import com.cong.fishisland.game.common.constant.GameConstants;
+import com.cong.fishisland.game.common.manager.GameRoomManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
