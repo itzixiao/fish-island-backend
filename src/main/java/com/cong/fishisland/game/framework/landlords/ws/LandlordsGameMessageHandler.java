@@ -93,22 +93,11 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
 
     @Override
     public void onDisconnect(Long userId) {
-        String roomId = roomManager.getUserRoomId(userId);
-        if (roomId != null) {
-            GameRoom room = roomManager.getRoom(roomId);
-            if (room instanceof LandlordsRoom) {
-                LandlordsRoom landlordsRoom = (LandlordsRoom) room;
-                gameService.disconnect(landlordsRoom, userId);
-                // 状态广播已由 gameService.disconnect() 内部处理
-
-                if (landlordsRoom.getOnlinePlayerCount() == 0) {
-                    if (landlordsRoom.getState() == GameRoom.RoomState.PLAYING || landlordsRoom.getState() == GameRoom.RoomState.ROBBING) {
-                        gameService.forceEndGame(landlordsRoom, "所有玩家都已离线");
-                    }
-                    roomManager.removeRoom(roomId);
-                }
-            }
-            roomManager.leaveRoom(roomId, userId);
+        // 直接调用 handleLeaveRoom 的离线处理逻辑，保持代码一致性
+        try {
+            handleLeaveRoom(null, userId);
+        } catch (Exception e) {
+            log.error("[断线处理] 处理失败 userId={}, error={}", userId, e.getMessage());
         }
     }
 
@@ -185,7 +174,9 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
         boolean isExistingPlayer = targetRoom != null && targetRoom.getPlayer(userId) != null;
         GameSession cachedSession = roomManager.getUserSession(userId);
 
-        boolean isReconnecting = isExistingPlayer && cachedSession != null && !cachedSession.isOnline() && !isRoomOwner;
+        // 真正重连：玩家已在房间中且当前离线（不管离线多久，只要房间还在游戏中就能重连）
+        boolean isReconnecting = isExistingPlayer && cachedSession != null && !cachedSession.isOnline();
+
 
         GameRoom room = null;
         if (req != null) {
@@ -246,8 +237,6 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
                     GameMessageTypeEnum.STATE_UPDATE.getType(), stateUpdateData);
         }
 
-        log.info("[加入房间] roomId={}, userId={}, isReconnecting={}", room.getRoomId(), userId, isReconnecting);
-
         // 返回统一的 ROOM_STATE 消息
         return GameMessageResult.success(GameMessageTypeEnum.ROOM_STATE.getType(), roomState);
     }
@@ -301,6 +290,16 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
                             .build();
                     sessionManager.broadcastToRoomExcept(userId, landlordsRoom.getPlayerOrder(),
                             GameMessageTypeEnum.STATE_UPDATE.getType(), eventBuilder);
+
+                    // 检查是否所有玩家都已离线，如果是则删除房间
+                    if (landlordsRoom.getOnlinePlayerCount() == 0) {
+                        log.info("游戏已结束且所有玩家都已离线，删除房间: roomId={}", landlordsRoom.getRoomId());
+                        roomManager.removeRoom(landlordsRoom.getRoomId());
+                    }
+                } else {
+                    // 房间已经空了，直接删除
+                    log.info("游戏已结束，玩家全部退出，删除房间: roomId={}", landlordsRoom.getRoomId());
+                    roomManager.removeRoom(landlordsRoom.getRoomId());
                 }
             } else {
                 roomManager.leaveRoom(landlordsRoom.getRoomId(), userId);
