@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- @author cong -->
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.cong.fishisland.mapper.ranking.GameStatsMapper">
+
+    <!-- 基础结果映射 -->
+    <resultMap id="BaseResultMap" type="com.cong.fishisland.model.ranking.GameStats">
+        <id property="id" column="id"/>
+        <result property="userId" column="userId"/>
+        <result property="gameType" column="gameType"/>
+        <result property="totalGames" column="totalGames"/>
+        <result property="winGames" column="winGames"/>
+        <result property="loseGames" column="loseGames"/>
+        <result property="drawGames" column="drawGames"/>
+        <result property="totalScore" column="totalScore"/>
+        <result property="winRate" column="winRate"/>
+        <result property="extraStats" column="extraStats"/>
+        <result property="lastPlayTime" column="lastPlayTime"/>
+        <result property="createTime" column="createTime"/>
+        <result property="updateTime" column="updateTime"/>
+        <result property="isDelete" column="isDelete"/>
+    </resultMap>
+
+    <!-- 排行榜查询基础字段 -->
+    <sql id="Ranking_Column_List">
+        s.userId AS userId,
+        u.userName AS userName,
+        u.userAvatar AS userAvatar,
+        s.totalGames AS totalGames,
+        s.winGames AS winGames,
+        s.loseGames AS loseGames,
+        s.totalScore AS totalScore,
+        s.winRate AS winRate,
+        s.extraStats AS extraStats
+    </sql>
+
+    <!--
+        upsertWithExtra: 写入或更新战绩主表
+        使用 JSON_MERGE_PATCH 合并扩展字段,支持新增和更新场景
+    -->
+    <insert id="upsertWithExtra" parameterType="com.cong.fishisland.model.ranking.GameStats">
+        INSERT INTO game_stats (
+            userId, gameType, totalGames, winGames, loseGames, drawGames,
+            totalScore, winRate, extraStats, lastPlayTime, createTime, updateTime, isDelete
+        ) VALUES (
+            #{stats.userId}, #{stats.gameType},
+            #{stats.totalGames}, #{stats.winGames}, #{stats.loseGames}, #{stats.drawGames},
+            #{stats.totalScore}, #{stats.winRate},
+            CAST(#{stats.extraStats} AS JSON),
+            NOW(), NOW(), NOW(), 0
+        )
+        ON DUPLICATE KEY UPDATE
+            totalGames = totalGames + VALUES(totalGames),
+            winGames = winGames + VALUES(winGames),
+            loseGames = loseGames + VALUES(loseGames),
+            drawGames = drawGames + VALUES(drawGames),
+            totalScore = totalScore + VALUES(totalScore),
+            winRate = VALUES(winRate),
+            extraStats = JSON_MERGE_PATCH(
+                IFNULL(extraStats, JSON_OBJECT()),
+                CAST(VALUES(extraStats) AS JSON)
+            ),
+            lastPlayTime = NOW(),
+            updateTime = NOW()
+    </insert>
+
+    <!--
+        insertRecord: 写入单局明细记录
+    -->
+    <insert id="insertRecord">
+        INSERT INTO game_stats_record (
+            userId, gameType, roomId, isWin, scoreDelta, role, createTime
+        ) VALUES (
+            #{context.userId}, #{context.gameType.code}, #{context.roomId},
+            CASE
+                WHEN #{context.isWin} IS NULL THEN 2
+                WHEN #{context.isWin} = true THEN 1
+                ELSE 0
+            END,
+            #{context.scoreDelta}, #{context.role}, NOW()
+        )
+    </insert>
+
+    <!--
+        selectRankingByMain: 按主指标维度查询排行榜
+        sortBy 白名单校验: winRate, winGames, totalGames, totalScore
+    -->
+    <select id="selectRankingByMain" resultType="com.cong.fishisland.model.ranking.GameRankingItemVO">
+        SELECT
+            <include refid="Ranking_Column_List"/>
+        FROM game_stats s
+        LEFT JOIN user u ON s.userId = u.id AND u.isDelete = 0
+        WHERE s.gameType = #{gameType}
+          AND s.isDelete = 0
+          AND s.totalGames >= #{minGames}
+        <choose>
+            <when test="sortBy == 'winRate'">
+                ORDER BY s.winRate DESC, s.totalGames DESC
+            </when>
+            <when test="sortBy == 'winGames'">
+                ORDER BY s.winGames DESC, s.totalGames DESC
+            </when>
+            <when test="sortBy == 'totalGames'">
+                ORDER BY s.totalGames DESC, s.winRate DESC
+            </when>
+            <when test="sortBy == 'totalScore'">
+                ORDER BY s.totalScore DESC, s.totalGames DESC
+            </when>
+            <otherwise>
+                ORDER BY s.winRate DESC, s.totalGames DESC
+            </otherwise>
+        </choose>
+        LIMIT #{limit}
+    </select>
+
+    <!--
+        selectRankingByExtra: 按扩展字段(JSON)查询排行榜
+        使用 JSON_EXTRACT 提取 JSON 中的字段进行排序
+    -->
+    <select id="selectRankingByExtra" resultType="com.cong.fishisland.model.ranking.GameRankingItemVO">
+        SELECT
+            <include refid="Ranking_Column_List"/>
+        FROM game_stats s
+        LEFT JOIN user u ON s.userId = u.id AND u.isDelete = 0
+        WHERE s.gameType = #{gameType}
+          AND s.isDelete = 0
+          AND s.totalGames >= #{minGames}
+        ORDER BY
+            CAST(JSON_EXTRACT(s.extraStats, CONCAT('$.', #{extKey})) AS DECIMAL(10, 4)) DESC,
+            s.totalGames DESC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+        selectUserStats: 查询用户个人战绩
+    -->
+    <select id="selectUserStats" resultType="com.cong.fishisland.model.ranking.GameUserStatsVO">
+        SELECT
+            s.userId AS userId,
+            s.gameType AS gameType,
+            s.totalGames AS totalGames,
+            s.winGames AS winGames,
+            s.loseGames AS loseGames,
+            s.drawGames AS drawGames,
+            s.totalScore AS totalScore,
+            s.winRate AS winRate,
+            s.lastPlayTime AS lastPlayTime,
+            s.extraStats AS extraStats
+        FROM game_stats s
+        WHERE s.userId = #{userId}
+          AND s.gameType = #{gameType}
+          AND s.isDelete = 0
+    </select>
+
+</mapper>
