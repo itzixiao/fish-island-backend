@@ -869,9 +869,13 @@ public class LandlordsGameService implements GameService {
             return;
         }
 
-        // 1. 设置状态并广播
+        // 1. 设置状态
         player.setRobotControlled(true);
         player.setRobotReason(reason);
+        // 只有玩家离开时才标记为离线，主动托管/超时托管不改变在线状态
+        if (reason == RobotReasonEnum.LEAVE) {
+            player.setOnline(false);
+        }
         roomManager.saveRoom(landlordsRoom);
         broadcastPlayerStatusChange(landlordsRoom, player, PlayerStatusEnum.ROBOT_ENABLED);
 
@@ -936,7 +940,6 @@ public class LandlordsGameService implements GameService {
                 : String.format("请 %s 出牌", player.getUserName());
 
         if (player.isRobotControlled()) {
-            log.info("轮到托管玩家出牌，延迟2秒执行AI: playerId={}", currentPlayerId);
 
             TurnNotifyResp notify = TurnNotifyResp.builder()
                     .event(GameActionEnum.TURN_START.getCode())
@@ -956,7 +959,6 @@ public class LandlordsGameService implements GameService {
             broadcastTurnNotify(room, notify);
 
             scheduler.schedule(() -> {
-                log.info("AI延迟出牌开始: playerId={}", currentPlayerId);
                 executeRobotPlay(room, currentPlayerId);
             }, 2, TimeUnit.SECONDS);
 
@@ -1069,17 +1071,14 @@ public class LandlordsGameService implements GameService {
         if (canPass) {
             List<String> playCards = robotService.getPlayCards(room, playerId);
             if (playCards.isEmpty()) {
-                log.info("AI托管无法压牌: playerId={}", playerId);
                 passInternal(room, playerId);
             } else {
-                log.info("AI托管出牌: playerId={}, cards={}", playerId, playCards);
                 playCardsInternal(room, playerId, playCards);
             }
         } else {
             PokerSorter.sortByLandlords(hand);
             Poker smallestCard = hand.getAll().get(hand.getAll().size() - 1);
             String cardId = smallestCard.getId();
-            log.info("AI托管出最小牌: playerId={}, card={}", playerId, cardId);
             playCardsInternal(room, playerId, Collections.singletonList(cardId));
         }
     }
@@ -1234,6 +1233,26 @@ public class LandlordsGameService implements GameService {
                 .build();
 
         broadcastActionResult(room, actionResult);
+
+        // 广播 STATE_UPDATE 消息，携带 players 数组供前端更新在线状态
+        // 只有在玩家离开（AI托管原因是 LEAVE）时才广播离线状态
+        boolean shouldBroadcastOffline = type == PlayerStatusEnum.ROBOT_ENABLED
+                && player.getRobotReason() == RobotReasonEnum.LEAVE;
+
+        Map<String, Object> roomInfo = new HashMap<>();
+        roomInfo.put("players", room.toRoomInfoResp().getPlayers());
+
+        Map<String, Object> stateUpdateData = new HashMap<>();
+        stateUpdateData.put("event", GameActionEnum.PLAYER_STATUS_CHANGE.getCode());
+        stateUpdateData.put("userId", player.getUserId());
+        stateUpdateData.put("playerId", player.getUserId());
+        // 只有离开时才发送 offline 状态，主动托管不改变在线状态
+        stateUpdateData.put("status", shouldBroadcastOffline ? "offline" : "online");
+        stateUpdateData.put("roomInfo", roomInfo);
+        stateUpdateData.put("players", room.toRoomInfoResp().getPlayers());
+
+        sessionManager.broadcastToRoom(room.getPlayerOrder(),
+                GameMessageTypeEnum.STATE_UPDATE.getType(), stateUpdateData);
 
         // 广播完整游戏状态，确保前端同步
         if (room.getState().isPlaying()) {
