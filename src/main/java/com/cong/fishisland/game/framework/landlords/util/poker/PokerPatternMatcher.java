@@ -416,9 +416,15 @@ public class PokerPatternMatcher {
             return true;
         }
 
-        Set<PokerPatternEnum> triplePatterns = EnumSet.of(
-                PokerPatternEnum.TRIPLE, PokerPatternEnum.TRIPLE_SINGLE, PokerPatternEnum.TRIPLE_PAIR);
-        if (triplePatterns.contains(current) && triplePatterns.contains(last)) {
+        if (current == PokerPatternEnum.TRIPLE && last == PokerPatternEnum.TRIPLE) {
+            return true;
+        }
+
+        if (current == PokerPatternEnum.TRIPLE_SINGLE && last == PokerPatternEnum.TRIPLE_SINGLE) {
+            return true;
+        }
+
+        if (current == PokerPatternEnum.TRIPLE_PAIR && last == PokerPatternEnum.TRIPLE_PAIR) {
             return true;
         }
 
@@ -430,9 +436,15 @@ public class PokerPatternMatcher {
             return true;
         }
 
-        Set<PokerPatternEnum> planePatterns = EnumSet.of(
-                PokerPatternEnum.PLANE, PokerPatternEnum.PLANE_SINGLE, PokerPatternEnum.PLANE_PAIR);
-        if (planePatterns.contains(current) && planePatterns.contains(last)) {
+        if (current == PokerPatternEnum.PLANE && last == PokerPatternEnum.PLANE) {
+            return true;
+        }
+
+        if (current == PokerPatternEnum.PLANE_SINGLE && last == PokerPatternEnum.PLANE_SINGLE) {
+            return true;
+        }
+
+        if (current == PokerPatternEnum.PLANE_PAIR && last == PokerPatternEnum.PLANE_PAIR) {
             return true;
         }
 

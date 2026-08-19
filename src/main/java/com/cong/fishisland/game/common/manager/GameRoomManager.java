@@ -144,17 +144,10 @@ public class GameRoomManager {
         GameSession cachedSession = getUserSession(userId);
         boolean isExistingPlayer = room.getPlayer(userId) != null;
 
-        // 判断是否为真正的重连：玩家已在房间中但当前离线
+        // 真正重连：玩家已在房间中且当前离线（不管离线多久，只要房间还在游戏中就能重连）
         boolean isReconnecting = isExistingPlayer
                 && cachedSession != null
                 && !cachedSession.isOnline();
-
-        // 只有真正的重连才校验重连窗口（创建后加入不校验）
-        if (isReconnecting && !cachedSession.isWithinReconnectWindow()) {
-            log.warn("重连窗口已过期: userId={}, roomId={}", userId, roomId);
-            sessionCache.deleteSession(userId);
-            isReconnecting = false;
-        }
 
         // 非重连用户检查
         if (!isReconnecting) {
@@ -446,6 +439,18 @@ public class GameRoomManager {
                 forceCloseRoom(roomId, "房间超时未开始游戏，已自动解散");
                 continue;
             }
+
+            // 规则 C：游戏已结束（ENDING/CLOSED）且没有在线玩家或玩家都离线了
+            if (room.getState() == GameRoom.RoomState.ENDING || room.getState() == GameRoom.RoomState.CLOSED) {
+                if (room.getOnlinePlayerCount() == 0) {
+                    log.info("房间[{}]游戏已结束且所有玩家都已离线，自动删除", roomId);
+                    removeRoom(roomId);
+                } else if (room.getPlayerCount() == 0) {
+                    log.info("房间[{}]游戏已结束且无玩家，自动删除", roomId);
+                    removeRoom(roomId);
+                }
+                continue;
+            }
         }
     }
 
@@ -520,8 +525,9 @@ public class GameRoomManager {
     /**
      * 保存会话
      */
-    private void saveSession(Long userId, String roomId, String userName, String avatar) {
+    public void saveSession(Long userId, String roomId, String userName, String avatar) {
         GameSession session = getUserSession(userId);
+        boolean wasOnline = session != null ? session.isOnline() : false;
         if (session == null) {
             session = new GameSession();
         }
@@ -529,7 +535,8 @@ public class GameRoomManager {
         session.setRoomId(roomId);
         session.setUserName(userName);
         session.setAvatar(avatar);
-        session.setOnline(true);
+        // 保留原有的在线状态
+        session.setOnline(wasOnline);
         session.setLastHeartbeat(System.currentTimeMillis());
         sessionCache.saveSession(session);
     }
