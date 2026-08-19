@@ -158,13 +158,14 @@ public class WebSocketServiceImpl implements WebSocketService {
         boolean offlineAll = offline(channel, uidOptional);
         if (uidOptional.isPresent() && offlineAll) {
             // 只有当用户的所有连接都断开时才发送下线事件
+            Long userId = uidOptional.get();
             User user = new User();
-            user.setId(uidOptional.get());
+            user.setId(userId);
             applicationEventPublisher.publishEvent(new UserOfflineEvent(this, user));
             // 发送当前用户下线信息给所有人
             sendToAllOnline(WSBaseResp.builder()
                     .type(MessageTypeEnum.USER_OFFLINE.getType())
-                    .data(uidOptional.get().toString()).build(), uidOptional.get());
+                    .data(userId.toString()).build(), userId);
         }
     }
 
