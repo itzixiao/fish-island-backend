@@ -22,7 +22,7 @@ public class PetEquipForgeDetailVO implements Serializable {
     @ApiModelProperty(value = "宠物ID")
     private Long petId;
 
-    @ApiModelProperty(value = "装备位置：1-武器 2-手套 3-鞋子 4-头盔 5-项链 6-翅膀")
+    @ApiModelProperty(value = "装备位置：1-武器 2-手套 3-鞋子 4-头盔 7-项链 8-翅膀")
     private Integer equipSlot;
 
     @ApiModelProperty(value = "装备位置名称，如：武器、手套、鞋子等")

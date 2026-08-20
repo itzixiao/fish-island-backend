@@ -48,7 +48,7 @@ public interface PetEquipForgeService extends IService<PetEquipForge> {
      * 查询单件装备锻造详情（含本次升级消耗积分和成功概率）
      *
      * @param petId     宠物ID
-     * @param equipSlot 装备位置 1-武器 2-手套 3-鞋子 4-头盔 5-项链 6-翅膀
+     * @param equipSlot 装备位置 1-武器 2-手套 3-鞋子 4-头盔 7-项链 8-翅膀
      * @return 装备锻造详情
      */
     PetEquipForgeDetailVO getForgeDetail(Long petId, Integer equipSlot);
