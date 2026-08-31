@@ -92,7 +92,7 @@ public class V2exDataSource implements DataSource {
      */
     private HotPost buildHotPost(List<HotPostDataVO> dataList) {
         return HotPost.builder()
-                .sort(CategoryTypeEnum.TECH_PROGRAMMING.getValue())
+                .sort(CategoryTypeEnum.TECH_PROGRAMMING.getSort())
                 .category(CategoryTypeEnum.TECH_PROGRAMMING.getValue())
                 .name("V2EX热榜")
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())
@@ -107,7 +107,7 @@ public class V2exDataSource implements DataSource {
      */
     private HotPost buildEmptyHotPost() {
         return HotPost.builder()
-                .sort(CategoryTypeEnum.TECH_PROGRAMMING.getValue())
+                .sort(CategoryTypeEnum.TECH_PROGRAMMING.getSort())
                 .category(CategoryTypeEnum.TECH_PROGRAMMING.getValue())
                 .name("V2EX热榜")
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())

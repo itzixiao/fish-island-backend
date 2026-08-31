@@ -62,7 +62,7 @@ public class ZhiBo8DataSource implements DataSource {
         }
 
         return HotPost.builder()
-                .sort(CategoryTypeEnum.SPORTS.getValue())
+                .sort(CategoryTypeEnum.SPORTS.getSort())
                 .name("直播吧体育热榜")
                 .category(CategoryTypeEnum.SPORTS.getValue())
                 .updateInterval(UpdateIntervalEnum.ONE_HOUR.getValue())

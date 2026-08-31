@@ -3,7 +3,9 @@ package com.cong.fishisland.model.vo.hot;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.io.Serializable;
+import java.util.List;
 
 /**
  * 热榜视图
@@ -28,5 +30,62 @@ public class HotPostDataVO implements Serializable {
      */
     private String url;
 
+    /**
+     * 股票市场标识（同花顺专用）
+     */
+    private Integer market;
+
+    /**
+     * 股票代码（同花顺专用）
+     */
+    private String code;
+
+    /**
+     * 同花顺热度值（接口返回字符串，保留原始精度）
+     */
+    private String rate;
+
+    /**
+     * 涨跌幅（百分比）
+     */
+    private BigDecimal riseAndFall;
+
+    /**
+     * AI 分析正文
+     */
+    private String analyse;
+
+    /**
+     * 热榜排名变化
+     */
+    private Integer hotRankChg;
+
+    /**
+     * 主题信息
+     */
+    private Object topic;
+
+    /**
+     * 股票标签
+     */
+    private StockTagVO tag;
+
+    /**
+     * 榜单排名
+     */
+    private Integer order;
+
+    /**
+     * AI 分析标题
+     */
+    private String analyseTitle;
+
+    @Data
+    public static class StockTagVO implements Serializable {
+
+        private List<String> conceptTag;
+
+        private String popularityTag;
+    }
 
 }

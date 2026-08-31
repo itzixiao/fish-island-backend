@@ -41,6 +41,7 @@ public class DataSourceRegistry {
     private final NgaDataSource ngaDataSource;
     private final NgaQingFengDataSource ngaQingFengDataSource;
     private final XiaoHeiHeDataSource xiaoHeiHeDataSource;
+    private final TongHuaShunDataSource tongHuaShunDataSource;
 
 
     @PostConstruct
@@ -63,6 +64,7 @@ public class DataSourceRegistry {
             put(HotDataKeyEnum.QQ_MUSIC.getValue(), qqMusicDataSource);
             put(HotDataKeyEnum.NGA.getValue(), ngaDataSource);
             put(HotDataKeyEnum.NGA_QING_FENG.getValue(), ngaQingFengDataSource);
+            put(HotDataKeyEnum.TONG_HUA_SHUN.getValue(), tongHuaShunDataSource);
 //            put(HotDataKeyEnum.LINUX_DO.getValue(), linuxDoDataSource);
 //            put(HotDataKeyEnum.V2EX.getValue(), v2exDataSource);
         }};

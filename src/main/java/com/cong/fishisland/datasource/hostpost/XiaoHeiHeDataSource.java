@@ -143,7 +143,7 @@ public class XiaoHeiHeDataSource implements DataSource {
         List<HotPostDataVO> topList = dataList.subList(0, Math.min(dataList.size(), TOP_N));
         return HotPost.builder()
                 // 排在知乎（sort=1）之后，仍归类为综合资讯
-                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getValue() + 1)
+                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getSort() + 1)
                 .category(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
                 .name("小黑盒热榜")
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())
