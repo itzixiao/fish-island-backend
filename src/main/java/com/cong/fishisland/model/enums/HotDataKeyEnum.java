@@ -34,6 +34,7 @@ public enum HotDataKeyEnum {
     NGA("NGA杂谈", "NGA"),
     NGA_QING_FENG("NGA晴风村", "NGAQingFeng"),
     TONG_HUA_SHUN("同花顺", "TongHuaShun"),
+    CAI_LIAN_SHE("财联社", "CaiLianShe"),
     KOISHI("摸鱼助手", "Koishi"),
 //    LINUX_DO("LinuxDo", "LinuxDo"),
 //    V2EX("V2EX", "V2EX")

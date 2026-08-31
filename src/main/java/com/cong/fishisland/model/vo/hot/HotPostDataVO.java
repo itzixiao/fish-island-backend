@@ -80,6 +80,36 @@ public class HotPostDataVO implements Serializable {
      */
     private String analyseTitle;
 
+    /**
+     * 资讯文章 ID（财联社专用）
+     */
+    private Long articleId;
+
+    /**
+     * 资讯摘要（财联社专用）
+     */
+    private String brief;
+
+    /**
+     * 封面图片（财联社专用）
+     */
+    private String image;
+
+    /**
+     * 发布时间戳（秒）（财联社专用）
+     */
+    private Long ctime;
+
+    /**
+     * 作者（财联社专用）
+     */
+    private String author;
+
+    /**
+     * 关联股票信息（财联社专用）
+     */
+    private String stocks;
+
     @Data
     public static class StockTagVO implements Serializable {
 

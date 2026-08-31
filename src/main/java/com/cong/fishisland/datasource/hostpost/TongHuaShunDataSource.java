@@ -134,7 +134,7 @@ public class TongHuaShunDataSource implements DataSource {
                 .category(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
                 .name("同花顺热榜")
                 .updateInterval(UpdateIntervalEnum.ONE_HOUR.getValue())
-                .iconUrl("https://eq.10jqka.com.cn/favicon.ico")
+                .iconUrl("https://ts1.tc.mm.bing.net/th/id/OIP-C.02qOoK0N2El13xuAHzDcxQAAAA?w=193&h=193&c=8&rs=1&qlt=90&o=6&dpr=1.3&pid=ImgAns&rm=2")
                 .hostJson(JSON.toJSONString(dataList))
                 .typeName("同花顺")
                 .build();
