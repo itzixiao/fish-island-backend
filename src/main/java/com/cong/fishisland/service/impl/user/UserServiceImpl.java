@@ -301,7 +301,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         String redisKey = EMAIL_CODE_PREFIX + email;
         Boolean occupied = stringRedisTemplate.opsForValue()
                 .setIfAbsent(redisKey, "SENT", Duration.ofMinutes(5));
-        if (Boolean.FALSE.equals(occupied)) {
+        if (Boolean.TRUE.equals(occupied)) {
             // 如果已存在占位（意味着该邮箱已被处理过），直接拒绝
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "验证码已发送，请稍后再试");
         }

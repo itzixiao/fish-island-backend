@@ -176,7 +176,7 @@ public class LinuxDoDataSource implements DataSource {
      */
     private HotPost buildHotPost(List<HotPostDataVO> dataList) {
         return HotPost.builder()
-                .sort(CategoryTypeEnum.TECH_PROGRAMMING.getValue())
+                .sort(CategoryTypeEnum.TECH_PROGRAMMING.getSort())
                 .category(CategoryTypeEnum.TECH_PROGRAMMING.getValue())
                 .name("LinuxDo热榜")
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())

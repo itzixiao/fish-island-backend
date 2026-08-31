@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 @Getter
 public enum HotDataKeyEnum {
     ZHI_HU("知乎", "zhiHu"),
+    XIAO_HEI_HE("小黑盒", "XiaoHeiHe"),
     WEI_BO("微博", "WeiBo"),
     CODE_FATHER("编程导航", "CodeFather"),
     BILI_BILI("哔哩哔哩", "BiliBili"),
@@ -32,6 +33,8 @@ public enum HotDataKeyEnum {
     QQ_MUSIC("QQ音乐", "QQMusic"),
     NGA("NGA杂谈", "NGA"),
     NGA_QING_FENG("NGA晴风村", "NGAQingFeng"),
+    TONG_HUA_SHUN("同花顺", "TongHuaShun"),
+    CAI_LIAN_SHE("财联社", "CaiLianShe"),
     KOISHI("摸鱼助手", "Koishi"),
 //    LINUX_DO("LinuxDo", "LinuxDo"),
 //    V2EX("V2EX", "V2EX")
