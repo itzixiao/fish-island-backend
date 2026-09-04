@@ -234,13 +234,20 @@ public class UserPointsServiceImpl extends ServiceImpl<UserPointsMapper, UserPoi
     }
 
     private void doDeductPoints(Long userId, Integer pointsToDeduct, String sourceType, String sourceId, String description) {
+        ThrowUtils.throwIf(pointsToDeduct == null || pointsToDeduct <= 0,
+                ErrorCode.PARAMS_ERROR, "扣除积分必须为正整数");
         UserPoints userPoints = this.getById(userId);
         ThrowUtils.throwIf(userPoints == null, ErrorCode.NOT_FOUND_ERROR, "用户积分不存在");
         int total = userPoints.getPoints() == null ? 0 : userPoints.getPoints();
         int used = userPoints.getUsedPoints() == null ? 0 : userPoints.getUsedPoints();
-        ThrowUtils.throwIf(total - used < pointsToDeduct, ErrorCode.OPERATION_ERROR, "用户积分不足");
+        long available = (long) total - used;
+        ThrowUtils.throwIf(available < pointsToDeduct, ErrorCode.OPERATION_ERROR, "用户积分不足");
         int beforeUsedPoints = used;
-        userPoints.setUsedPoints(used + pointsToDeduct);
+        try {
+            userPoints.setUsedPoints(Math.addExact(used, pointsToDeduct));
+        } catch (ArithmeticException e) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "积分数值超出系统支持范围");
+        }
         this.updateById(userPoints);
 
         userPointsRecordService.addPointsRecord(userId, 2, pointsToDeduct,
@@ -256,9 +263,16 @@ public class UserPointsServiceImpl extends ServiceImpl<UserPointsMapper, UserPoi
     }
 
     private void doUpdateUsedPoints(Long userId, Integer points, String sourceType, String sourceId, String description) {
+        ThrowUtils.throwIf(points == null || points == 0, ErrorCode.PARAMS_ERROR, "积分变动值不能为0");
         UserPoints userPoints = this.getById(userId);
+        ThrowUtils.throwIf(userPoints == null, ErrorCode.NOT_FOUND_ERROR, "用户积分不存在");
         int beforeUsedPoints = userPoints.getUsedPoints() == null ? 0 : userPoints.getUsedPoints();
-        int afterUsedPoints = beforeUsedPoints + points;
+        final int afterUsedPoints;
+        try {
+            afterUsedPoints = Math.addExact(beforeUsedPoints, points);
+        } catch (ArithmeticException e) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "积分数值超出系统支持范围");
+        }
         userPoints.setUsedPoints(afterUsedPoints);
         this.updateById(userPoints);
 
