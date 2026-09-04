@@ -8,6 +8,7 @@ import com.cong.fishisland.game.framework.landlords.model.LandlordsRoom;
 import com.cong.fishisland.game.framework.landlords.model.poker.Poker;
 import com.cong.fishisland.game.framework.landlords.model.poker.PokerHand;
 import com.cong.fishisland.game.framework.landlords.model.poker.PatternResult;
+import com.cong.fishisland.game.framework.landlords.util.poker.PokerGenerator;
 import com.cong.fishisland.game.framework.landlords.util.poker.PokerPatternMatcher;
 import com.cong.fishisland.game.framework.landlords.util.poker.PokerSorter;
 import lombok.extern.slf4j.Slf4j;
@@ -59,8 +60,46 @@ public class LandlordsRobotService {
             return playSmallestSingle(sortedHand);
         } else {
             PatternResult lastPattern = PokerPatternMatcher.analyze(lastPlayedCards);
-            return playToBeat(sortedHand, lastPattern);
+            return playToBeat(sortedHand, lastPattern, hand);
         }
+    }
+
+    /**
+     * 让 AI 在选完牌之后自检一次，确保牌在自己手中且牌型合法可压。
+     * 避免 AI 选出一组牌但服务端校验失败、导致 AI 错失出牌机会的情况。
+     */
+    private List<String> filterValid(List<String> candidateIds, PokerHand aiHand, PatternResult lastPattern) {
+        if (candidateIds == null || candidateIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        // 1. 解析为 Poker 对象
+        List<Poker> playedPokers = new ArrayList<>();
+        List<Poker> handSnapshot = aiHand.getAll();
+        for (String id : candidateIds) {
+            Poker p = PokerGenerator.parseById(id);
+            if (p == null) {
+                return Collections.emptyList();
+            }
+            playedPokers.add(p);
+        }
+        // 2. 每张牌都必须在 AI 手牌中（按点数匹配）
+        for (Poker played : playedPokers) {
+            boolean found = false;
+            for (Poker p : handSnapshot) {
+                if (p.getValue() == played.getValue()) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return Collections.emptyList();
+            }
+        }
+        // 3. 牌型合法且能压过上家（压牌场景 isFirstPlay=false）
+        if (!PokerPatternMatcher.isValidPlay(playedPokers, lastPattern, false)) {
+            return Collections.emptyList();
+        }
+        return candidateIds;
     }
 
     private List<String> playSmallestSingle(PokerHand hand) {
@@ -76,7 +115,7 @@ public class LandlordsRobotService {
         return Collections.singletonList(smallest.getId());
     }
 
-    private List<String> playToBeat(PokerHand hand, PatternResult lastPattern) {
+    private List<String> playToBeat(PokerHand hand, PatternResult lastPattern, PokerHand originalHand) {
         if (hand.isEmpty()) {
             return Collections.emptyList();
         }
@@ -85,45 +124,66 @@ public class LandlordsRobotService {
         List<Poker> handList = hand.getAll();
         int lastValue = lastPattern.getMainValue();
 
+        List<String> candidate;
         switch (patternType) {
             case SINGLE:
-                return playSingleToBeat(handList, lastValue);
+                candidate = playSingleToBeat(handList, lastValue);
+                break;
 
             case PAIR:
-                return playPairToBeat(handList, lastValue);
+                candidate = playPairToBeat(handList, lastValue);
+                break;
 
             case TRIPLE:
-                return playTripleToBeat(handList, lastValue);
+                candidate = playTripleToBeat(handList, lastValue);
+                break;
 
             case TRIPLE_SINGLE:
-                return playTripleWithSingleToBeat(hand, lastValue);
+                candidate = playTripleWithSingleToBeat(hand, lastValue);
+                break;
 
             case TRIPLE_PAIR:
-                return playTripleWithPairToBeat(hand, lastValue);
+                candidate = playTripleWithPairToBeat(hand, lastValue);
+                break;
 
             case STRAIGHT:
-                return playStraightToBeat(handList, lastValue);
+                candidate = playStraightToBeat(handList, lastValue);
+                break;
 
             case DOUBLE_STRAIGHT:
-                return playStraightPairToBeat(handList, lastValue);
+                candidate = playStraightPairToBeat(handList, lastValue);
+                break;
 
             case PLANE:
             case PLANE_SINGLE:
             case PLANE_PAIR:
-                return playPlaneToBeat(handList, lastValue, lastPattern.getCount());
+                candidate = playPlaneToBeat(handList, lastValue, lastPattern.getCount());
+                break;
 
             case BOMB:
-                return playBombToBeat(handList, lastValue);
+                candidate = playBombToBeat(handList, lastValue);
+                break;
 
             case QUAD_PLANE:
-                return playQuadPlaneToBeat(hand, lastValue);
+                candidate = playQuadPlaneToBeat(hand, lastValue);
+                break;
 
             case JOKER_BOMB:
                 return Collections.emptyList();
 
             default:
-                return playSmallestSingle(new PokerHand(handList));
+                return playSmallestSingle(hand);
         }
+
+        List<String> valid = filterValid(candidate, originalHand, lastPattern);
+        if (!valid.isEmpty()) {
+            return valid;
+        }
+
+        // 退而求其次：尝试用炸弹/王炸炸
+        List<String> bomb = playBombToBeat(handList, lastValue);
+        valid = filterValid(bomb, originalHand, lastPattern);
+        return valid;
     }
 
     private List<String> playSingleToBeat(List<Poker> hand, int lastValue) {
@@ -154,10 +214,10 @@ public class LandlordsRobotService {
             if (triple.getLandlordsSortValue() > lastValue) {
                 List<String> result = new ArrayList<>();
                 result.add(triple.getId());
+                // 找到另外两张同点牌，组成真正的三张
                 for (Poker p : hand) {
-                    if (p != triple && p.getValue() == triple.getValue()) {
+                    if (p != triple && p.getValue() == triple.getValue() && result.size() < 3) {
                         result.add(p.getId());
-                        break;
                     }
                 }
                 return result;
