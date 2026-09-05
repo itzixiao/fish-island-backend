@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.cong.fishisland.common.ErrorCode;
 import com.cong.fishisland.common.exception.BusinessException;
+import com.cong.fishisland.config.IndexTradeProperties;
 import com.cong.fishisland.mapper.fund.IndexTradeMapper;
 import com.cong.fishisland.model.entity.fund.IndexPosition;
 import com.cong.fishisland.model.entity.fund.IndexTradeRecord;
@@ -22,11 +23,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.annotation.Resource;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Date;
@@ -59,12 +63,17 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
     @Resource
     private RedissonClient redissonClient;
 
+    @Resource
+    private IndexTradeProperties indexTradeProperties;
+
+    @Resource
+    private PlatformTransactionManager transactionManager;
+
     // ==================== 常量定义 ====================
 
     /** 指数买入业务锁（与 user:points:lock 形成双重保护） */
     private static final String INDEX_BUY_LOCK_PREFIX = "index:trade:buy:lock:";
     private static final long INDEX_BUY_LOCK_WAIT_SECONDS = 5;
-    private static final long INDEX_BUY_LOCK_LEASE_SECONDS = 15;
 
     private static final int TRADE_TYPE_BUY = 1;
     private static final int TRADE_TYPE_SELL = 2;
@@ -72,6 +81,8 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
 
     private static final int MIN_BUY_AMOUNT = 100;
     private static final BigDecimal MIN_SHARES = new BigDecimal("0.0001");
+    /** 与 index_position 的 DECIMAL(20, 8) 字段容量一致。 */
+    private static final BigDecimal MAX_POSITION_SHARES = new BigDecimal("999999999999.99999999");
     /** 卖出手续费率 0.15% */
     private static final BigDecimal SELL_FEE_RATE = new BigDecimal("0.0015");
 
@@ -85,28 +96,31 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
     // ==================== 交易操作（对外接口） ====================
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public IndexTradeResultVO buyIndexWithResult(Long userId, String indexCode, Long amount) {
+        validateBuyAmount(amount);
         indexCode = validateAndNormalizeIndexCode(indexCode);
         final String tradeIndexCode = indexCode;
-        return runWithIndexBuyLock(userId, () -> {
-            checkTradeTime();
-            BigDecimal currentNav = getCurrentNav(tradeIndexCode);
-            BigDecimal shares = calculateShares(amount, currentNav);
-            Long tradeId = executeBuy(userId, tradeIndexCode, amount, shares, currentNav);
-            return buildBuyResult(tradeId, amount, shares, currentNav);
-        });
+        return runWithIndexBuyLock(userId, () -> new TransactionTemplate(transactionManager).execute(status -> {
+                checkTradeTime();
+                validateDailyBuyAmount(userId, amount);
+                BigDecimal currentNav = getCurrentNav(tradeIndexCode);
+                BigDecimal shares = calculateShares(amount, currentNav);
+                Long tradeId = executeBuy(userId, tradeIndexCode, amount, shares, currentNav);
+                return buildBuyResult(tradeId, amount, shares, currentNav);
+            }));
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public IndexTradeResultVO sellIndexWithResult(Long userId, String indexCode, BigDecimal shares) {
+        validateSellShares(shares);
         indexCode = validateAndNormalizeIndexCode(indexCode);
         checkTradeTime();
         BigDecimal currentNav = getCurrentNav(indexCode);
         Long grossAmount = calculateAmount(shares, currentNav);
         Long fee = calculateSellFee(grossAmount);
         Long netAmount = grossAmount - fee;
+        validateSellAmount(netAmount);
         Long tradeId = executeSell(userId, indexCode, shares, netAmount, currentNav);
         return buildSellResult(tradeId, shares, grossAmount, netAmount, fee, currentNav);
     }
@@ -174,7 +188,8 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
     private <T> T runWithIndexBuyLock(Long userId, Supplier<T> action) {
         RLock lock = redissonClient.getLock(INDEX_BUY_LOCK_PREFIX + userId);
         try {
-            boolean acquired = lock.tryLock(INDEX_BUY_LOCK_WAIT_SECONDS, INDEX_BUY_LOCK_LEASE_SECONDS, TimeUnit.SECONDS);
+            // 不指定固定租期，使用 Redisson watchdog 续期，确保数据库事务提交前锁不会提前失效。
+            boolean acquired = lock.tryLock(INDEX_BUY_LOCK_WAIT_SECONDS, TimeUnit.SECONDS);
             if (!acquired) {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "买入操作频繁，请稍后再试");
             }
@@ -202,10 +217,6 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
      * 计算买入份额
      */
     private BigDecimal calculateShares(Long amount, BigDecimal nav) {
-        if (amount < MIN_BUY_AMOUNT) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "买入金额不能低于" + MIN_BUY_AMOUNT + "积分");
-        }
-
         BigDecimal shares = new BigDecimal(amount).divide(nav, 4, RoundingMode.DOWN);
 
         if (shares.compareTo(MIN_SHARES) < 0) {
@@ -219,9 +230,15 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
      * 扣除用户积分
      */
     private void deductUserPoints(Long userId, Long amount) {
+        final int points;
+        try {
+            points = Math.toIntExact(amount);
+        } catch (ArithmeticException e) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "买入金额超出系统支持范围");
+        }
         userPointsService.deductPoints(
                 userId,
-                amount.intValue(),
+                points,
                 INDEX_BUY,
                 null,
                 "指数买入"
@@ -254,10 +271,6 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
      * 执行卖出操作
      */
     private Long executeSell(Long userId, String indexCode, BigDecimal shares, Long netAmount, BigDecimal nav) {
-        if (shares.compareTo(MIN_SHARES) < 0) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出份额不能低于" + MIN_SHARES);
-        }
-
         boolean success = positionService.reduceAvailableShares(userId, indexCode, shares);
         if (!success) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "可用份额不足");
@@ -272,30 +285,77 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
      * 计算卖出成交额（扣费前）
      */
     private Long calculateAmount(BigDecimal shares, BigDecimal nav) {
-        return shares.multiply(nav).setScale(0, RoundingMode.DOWN).longValue();
+        try {
+            long amount = shares.multiply(nav).setScale(0, RoundingMode.DOWN).longValueExact();
+            if (amount <= 0) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出成交金额过小");
+            }
+            return amount;
+        } catch (ArithmeticException e) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出金额超出系统支持范围");
+        }
     }
 
     /**
      * 计算卖出手续费（成交额 × 0.15%，向下取整）
      */
     private Long calculateSellFee(Long grossAmount) {
-        return new BigDecimal(grossAmount)
-                .multiply(SELL_FEE_RATE)
-                .setScale(0, RoundingMode.DOWN)
-                .longValue();
+        try {
+            return new BigDecimal(grossAmount)
+                    .multiply(SELL_FEE_RATE)
+                    .setScale(0, RoundingMode.DOWN)
+                    .longValueExact();
+        } catch (ArithmeticException e) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出手续费超出系统支持范围");
+        }
     }
 
     /**
      * 返还用户积分（T+0，已扣手续费）
      */
     private void returnUserPoints(Long userId, Long netAmount) {
+        final int points;
+        try {
+            points = Math.toIntExact(netAmount);
+        } catch (ArithmeticException e) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "卖出金额超出系统支持范围");
+        }
         userPointsService.updateUsedPoints(
                 userId,
-                -netAmount.intValue(),
+                -points,
                 INDEX_SELL,
                 null,
                 "指数卖出"
         );
+    }
+
+    /**
+     * 在查询行情和拼接持仓更新 SQL 前校验卖出份额。
+     */
+    private void validateSellShares(BigDecimal shares) {
+        if (shares == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出份额不能为空");
+        }
+        if (shares.compareTo(MIN_SHARES) < 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出份额不能低于" + MIN_SHARES);
+        }
+        if (shares.compareTo(MAX_POSITION_SHARES) > 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出份额超出系统支持范围");
+        }
+    }
+
+    /**
+     * 积分账户字段为 Integer，必须在变更持仓前拒绝无法安全入账的金额。
+     */
+    private void validateSellAmount(Long netAmount) {
+        try {
+            int points = Math.toIntExact(netAmount);
+            if (points <= 0) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出到账金额必须大于0");
+            }
+        } catch (ArithmeticException e) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "卖出金额超出系统支持范围");
+        }
     }
 
     /**
@@ -365,6 +425,55 @@ public class IndexTradeServiceImpl extends ServiceImpl<IndexTradeMapper, IndexTr
                     "暂不支持该指数，当前支持：上证指数(sh000001)、深证成指(sz399001)、创业板指(sz399006)、沪深300(sh000300)、上证50(sh000016)");
         }
         return normalized;
+    }
+
+    /**
+     * 在任何数值转换和外部调用前校验单笔金额。
+     */
+    private void validateBuyAmount(Long amount) {
+        if (amount == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "买入金额不能为空");
+        }
+        if (amount < MIN_BUY_AMOUNT) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "买入金额不能低于" + MIN_BUY_AMOUNT + "积分");
+        }
+        long maxSingleBuyAmount = indexTradeProperties.getMaxSingleBuyAmount();
+        if (maxSingleBuyAmount < MIN_BUY_AMOUNT) {
+            log.error("指数单笔买入上限配置无效: {}", maxSingleBuyAmount);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "指数交易配置异常");
+        }
+        if (amount > maxSingleBuyAmount) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR,
+                    "单笔买入金额不能超过" + maxSingleBuyAmount + "积分");
+        }
+        if (amount > Integer.MAX_VALUE) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "买入金额超出系统支持范围");
+        }
+    }
+
+    /**
+     * 校验当日累计买入金额。该方法在用户级分布式锁和数据库事务内执行。
+     */
+    private void validateDailyBuyAmount(Long userId, long amount) {
+        long maxDailyBuyAmount = indexTradeProperties.getMaxDailyBuyAmount();
+        if (maxDailyBuyAmount < indexTradeProperties.getMaxSingleBuyAmount()) {
+            log.error("指数每日买入上限配置无效: 单笔={}, 每日={}",
+                    indexTradeProperties.getMaxSingleBuyAmount(), maxDailyBuyAmount);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "指数交易配置异常");
+        }
+
+        ZoneId zoneId = ZoneId.of("Asia/Shanghai");
+        LocalDate today = LocalDate.now(zoneId);
+        Date startTime = Date.from(today.atStartOfDay(zoneId).toInstant());
+        Date endTime = Date.from(today.plusDays(1).atStartOfDay(zoneId).toInstant());
+        Long boughtAmount = baseMapper.sumCompletedBuyAmount(userId, startTime, endTime);
+        long todayBoughtAmount = boughtAmount == null ? 0L : boughtAmount;
+
+        if (todayBoughtAmount < 0 || amount > maxDailyBuyAmount - todayBoughtAmount) {
+            long remaining = Math.max(0L, maxDailyBuyAmount - Math.max(0L, todayBoughtAmount));
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "今日累计买入不能超过" + maxDailyBuyAmount + "积分，今日剩余额度" + remaining + "积分");
+        }
     }
 
     /**

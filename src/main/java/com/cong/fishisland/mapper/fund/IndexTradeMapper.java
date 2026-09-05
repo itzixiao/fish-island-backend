@@ -2,6 +2,9 @@ package com.cong.fishisland.mapper.fund;
 
 import com.cong.fishisland.model.entity.fund.IndexTradeRecord;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Param;
+
+import java.util.Date;
 
 /**
 * @author Shing
@@ -11,4 +14,10 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 */
 public interface IndexTradeMapper extends BaseMapper<IndexTradeRecord> {
 
+    /**
+     * 查询指定时间段内已完成的买入金额。
+     */
+    Long sumCompletedBuyAmount(@Param("userId") Long userId,
+                               @Param("startTime") Date startTime,
+                               @Param("endTime") Date endTime);
 }

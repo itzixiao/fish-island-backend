@@ -524,7 +524,9 @@ public class MomentsServiceImpl extends ServiceImpl<MomentsMapper, Moments>
         }
         return momentsLikeMapper.selectList(
                         new LambdaQueryWrapper<MomentsLike>()
-                                .in(MomentsLike::getMomentId, momentIds))
+                                .in(MomentsLike::getMomentId, momentIds)
+                                .orderByAsc(MomentsLike::getCreateTime)
+                                .orderByAsc(MomentsLike::getId))
                 .stream()
                 .collect(Collectors.groupingBy(MomentsLike::getMomentId));
     }
