@@ -38,7 +38,7 @@ public class NgaQingFengDataSource implements DataSource {
         }
 
         return HotPost.builder()
-                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
+                .sort(CategoryTypeEnum.VIDEO_ENTERTAINMENT.getSort() + 1)
                 .name("NGA晴风")
                 .category(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())

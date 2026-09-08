@@ -12,8 +12,8 @@ package com.cong.fishisland.constant;
  *   <li>手套（2）  → 防御力</li>
  *   <li>鞋子（3）  → 速度</li>
  *   <li>头盔（4）  → 最大生命值</li>
- *   <li>项链（5）  → 暴击率</li>
- *   <li>翅膀（6）  → 连击率</li>
+ *   <li>项链（7）  → 暴击率</li>
+ *   <li>翅膀（8）  → 连击率</li>
  * </ul>
  *
  * @author cong

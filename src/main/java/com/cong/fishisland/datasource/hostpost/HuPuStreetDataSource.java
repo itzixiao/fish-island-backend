@@ -50,7 +50,7 @@ public class HuPuStreetDataSource implements DataSource {
         }
 
         return HotPost.builder()
-                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
+                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getSort())
                 .name("虎扑步行街热榜")
                 .category(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())

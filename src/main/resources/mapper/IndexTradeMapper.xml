@@ -24,4 +24,14 @@
         shares,status,expectedSettleDate,actualSettleTime,profitLoss,
         createTime
     </sql>
+
+    <select id="sumCompletedBuyAmount" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(amount), 0)
+        FROM index_trade_record
+        WHERE userId = #{userId}
+          AND tradeType = 1
+          AND status = 1
+          AND createTime &gt;= #{startTime}
+          AND createTime &lt; #{endTime}
+    </select>
 </mapper>

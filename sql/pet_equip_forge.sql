@@ -1,5 +1,5 @@
 -- 宠物装备锻造表
--- 装备位置：1-武器 2-手套 3-鞋子 4-头盔 5-项链 6-翅膀
+-- 装备位置：1-武器 2-手套 3-鞋子 4-头盔 7-项链 8-翅膀
 -- 词条等级：WHITE=白 BLUE=蓝 PURPLE=紫 GOLD=金 RED=红
 -- 词条属性：ATTACK=攻击力 MAX_HP=最大生命值 DEFENSE=防御力
 --           CRIT_RATE=暴击率 COMBO_RATE=连击率 DODGE_RATE=闪避率
@@ -10,7 +10,7 @@ create table if not exists pet_equip_forge
 (
     id          BIGINT       auto_increment comment '主键ID' PRIMARY KEY,
     petId       BIGINT       not null comment '宠物ID',
-    equipSlot   TINYINT      not null comment '装备位置 1-武器 2-手套 3-鞋子 4-头盔 5-项链 6-翅膀',
+    equipSlot   TINYINT      not null comment '装备位置 1-武器 2-手套 3-鞋子 4-头盔 7-项链 8-翅膀',
     equipLevel  TINYINT      not null default 0 comment '装备等级（默认0）',
     entry1      JSON         default null comment '词条1 {attr: 词条属性, grade: 词条等级, value: 属性数值, locked: 是否锁定}',
     entry2      JSON         default null comment '词条2 {attr: 词条属性, grade: 词条等级, value: 属性数值, locked: 是否锁定}',

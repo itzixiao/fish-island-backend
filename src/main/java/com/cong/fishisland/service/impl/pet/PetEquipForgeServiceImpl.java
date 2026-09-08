@@ -364,35 +364,42 @@ public class PetEquipForgeServiceImpl extends ServiceImpl<PetEquipForgeMapper, P
      *   <li>手套(2)  → 防御力</li>
      *   <li>鞋子(3)  → 速度</li>
      *   <li>头盔(4)  → 最大生命值</li>
-     *   <li>项链(5)  → 暴击率</li>
-     *   <li>翅膀(6)  → 连击率</li>
+     *   <li>项链(7)  → 暴击率</li>
+     *   <li>翅膀(8)  → 连击率</li>
      * </ul>
      */
     static void applyLevelBonusBySlot(int equipSlot, int level, PetEquipStatsVO stats) {
         if (level <= 0 || equipSlot <= 0) return;
-        switch (equipSlot) {
-            case 1: // 武器 → 攻击力
+        EquipSlotEnum slotEnum;
+        try {
+            slotEnum = EquipSlotEnum.of(equipSlot);
+        } catch (IllegalArgumentException e) {
+            log.warn("未知装备槽位: {}", equipSlot);
+            return;
+        }
+        switch (slotEnum) {
+            case WEAPON:
                 stats.setTotalBaseAttack(stats.getTotalBaseAttack()
                         + (int) calcLevelBonus(PetForgeConstant.WEAPON_ATK_BASE, level));
                 break;
-            case 2: // 手套 → 防御力
+            case GLOVES:
                 stats.setTotalBaseDefense(stats.getTotalBaseDefense()
                         + (int) calcLevelBonus(PetForgeConstant.GLOVES_DEF_BASE, level));
                 break;
-            case 3: // 鞋子 → 速度
+            case SHOES:
                 stats.setSpeed(stats.getSpeed() == null
                         ? (int) calcLevelBonus(PetForgeConstant.SHOES_SPEED_BASE, level)
                         : stats.getSpeed() + (int) calcLevelBonus(PetForgeConstant.SHOES_SPEED_BASE, level));
                 break;
-            case 4: // 头盔 → 最大生命值
+            case HELMET:
                 stats.setTotalBaseHp(stats.getTotalBaseHp()
                         + (int) calcLevelBonus(PetForgeConstant.HELMET_HP_BASE, level));
                 break;
-            case 5: // 项链 → 暴击率
+            case NECKLACE:
                 stats.setCritRate(stats.getCritRate()
                         + round4(calcLevelBonus(PetForgeConstant.NECKLACE_CRIT_BASE, level) / 100.0));
                 break;
-            case 6: // 翅膀 → 连击率
+            case WINGS:
                 stats.setComboRate(stats.getComboRate()
                         + round4(calcLevelBonus(PetForgeConstant.WINGS_COMBO_BASE, level) / 100.0));
                 break;

@@ -22,9 +22,9 @@ public class ForgeRefreshRequest implements Serializable {
     private Long petId;
 
     /**
-     * 装备位置 1-武器 2-手套 3-鞋子 4-头盔 5-项链 6-翅膀
+     * 装备位置 1-武器 2-手套 3-鞋子 4-头盔 7-项链 8-翅膀
      */
-    @ApiModelProperty(value = "装备位置：1-武器 2-手套 3-鞋子 4-头盔 5-项链 6-翅膀", required = true, example = "1")
+    @ApiModelProperty(value = "装备位置：1-武器 2-手套 3-鞋子 4-头盔 7-项链 8-翅膀", required = true, example = "1")
     private Integer equipSlot;
 
     private static final long serialVersionUID = 1L;

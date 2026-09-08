@@ -89,7 +89,7 @@ public class JueJinDataSource implements DataSource {
         // 4. 排序并返回
         return HotPost.builder()
                 .category(CategoryTypeEnum.TECH_PROGRAMMING.getValue())
-                .sort(CategoryTypeEnum.TECH_PROGRAMMING.getValue())
+                .sort(CategoryTypeEnum.TECH_PROGRAMMING.getSort())
                 .name("掘金热榜")
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())
                 .iconUrl("https://lf3-cdn-tos.bytescm.com/obj/static/xitu_juejin_web//static/favicon.ico")

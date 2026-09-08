@@ -38,7 +38,7 @@ public class NgaDataSource implements DataSource {
         }
 
         return HotPost.builder()
-                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
+                .sort(CategoryTypeEnum.VIDEO_ENTERTAINMENT.getSort() + 1)
                 .name("NGA杂谈")
                 .category(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())

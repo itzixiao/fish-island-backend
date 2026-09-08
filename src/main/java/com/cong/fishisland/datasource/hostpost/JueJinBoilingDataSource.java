@@ -107,7 +107,7 @@ public class JueJinBoilingDataSource implements DataSource {
         // 5. 排序并返回
         return HotPost.builder()
                 .category(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
-                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
+                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getSort())
                 .name("掘金沸点热榜")
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())
                 .iconUrl("https://lf3-cdn-tos.bytescm.com/obj/static/xitu_juejin_web//static/favicon.ico")

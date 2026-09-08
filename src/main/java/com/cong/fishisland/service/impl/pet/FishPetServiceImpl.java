@@ -18,6 +18,7 @@ import com.cong.fishisland.model.dto.pet.UpdatePetNameRequest;
 import com.cong.fishisland.model.entity.pet.EquipEntry;
 import com.cong.fishisland.model.entity.pet.FishPet;
 import com.cong.fishisland.model.entity.pet.PetEquipForge;
+import com.cong.fishisland.model.enums.pet.EquipSlotEnum;
 import com.cong.fishisland.model.vo.pet.*;
 import com.cong.fishisland.model.entity.user.User;
 import com.cong.fishisland.service.*;
@@ -234,12 +235,12 @@ public class FishPetServiceImpl extends ServiceImpl<FishPetMapper, FishPet> impl
 
     static {
         EQUIP_SLOT_NAME_MAP = new HashMap<>();
-        EQUIP_SLOT_NAME_MAP.put("weapon", 1);
-        EQUIP_SLOT_NAME_MAP.put("hand", 2);
-        EQUIP_SLOT_NAME_MAP.put("foot", 3);
-        EQUIP_SLOT_NAME_MAP.put("head", 4);
-        EQUIP_SLOT_NAME_MAP.put("necklace", 5);
-        EQUIP_SLOT_NAME_MAP.put("wing", 6);
+        EQUIP_SLOT_NAME_MAP.put("weapon", EquipSlotEnum.WEAPON.getValue());
+        EQUIP_SLOT_NAME_MAP.put("hand", EquipSlotEnum.GLOVES.getValue());
+        EQUIP_SLOT_NAME_MAP.put("foot", EquipSlotEnum.SHOES.getValue());
+        EQUIP_SLOT_NAME_MAP.put("head", EquipSlotEnum.HELMET.getValue());
+        EQUIP_SLOT_NAME_MAP.put("necklace", EquipSlotEnum.NECKLACE.getValue());
+        EQUIP_SLOT_NAME_MAP.put("wing", EquipSlotEnum.WINGS.getValue());
     }
 
     /**
@@ -345,29 +346,35 @@ public class FishPetServiceImpl extends ServiceImpl<FishPetMapper, FishPet> impl
      */
     private void applyLevelBonusBySlotToSingle(int equipSlot, int level, SingleEquipStatsVO stats) {
         if (level <= 0 || equipSlot <= 0) return;
+        EquipSlotEnum slotEnum;
+        try {
+            slotEnum = EquipSlotEnum.of(equipSlot);
+        } catch (IllegalArgumentException e) {
+            return;
+        }
         double base;
-        switch (equipSlot) {
-            case 1: // 武器 → 攻击力
+        switch (slotEnum) {
+            case WEAPON:
                 base = PetForgeConstant.WEAPON_ATK_BASE * Math.pow(level, PetForgeConstant.LEVEL_SCALE);
                 stats.setBaseAttack(stats.getBaseAttack() + (int) base);
                 break;
-            case 2: // 手套 → 防御力
+            case GLOVES:
                 base = PetForgeConstant.GLOVES_DEF_BASE * Math.pow(level, PetForgeConstant.LEVEL_SCALE);
                 stats.setBaseDefense(stats.getBaseDefense() + (int) base);
                 break;
-            case 3: // 鞋子 → 速度
+            case SHOES:
                 base = PetForgeConstant.SHOES_SPEED_BASE * Math.pow(level, PetForgeConstant.LEVEL_SCALE);
                 stats.setBaseSpeed(stats.getBaseSpeed() == null ? (int) base : stats.getBaseSpeed() + (int) base);
                 break;
-            case 4: // 头盔 → 最大生命值
+            case HELMET:
                 base = PetForgeConstant.HELMET_HP_BASE * Math.pow(level, PetForgeConstant.LEVEL_SCALE);
                 stats.setBaseHp(stats.getBaseHp() + (int) base);
                 break;
-            case 5: // 项链 → 暴击率
+            case NECKLACE:
                 base = PetForgeConstant.NECKLACE_CRIT_BASE * Math.pow(level, PetForgeConstant.LEVEL_SCALE);
                 stats.setCritRate(round4(stats.getCritRate() + base / 100.0));
                 break;
-            case 6: // 翅膀 → 连击率
+            case WINGS:
                 base = PetForgeConstant.WINGS_COMBO_BASE * Math.pow(level, PetForgeConstant.LEVEL_SCALE);
                 stats.setComboRate(round4(stats.getComboRate() + base / 100.0));
                 break;

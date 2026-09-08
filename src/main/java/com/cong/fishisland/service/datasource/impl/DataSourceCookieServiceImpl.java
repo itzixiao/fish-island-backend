@@ -55,11 +55,6 @@ public class DataSourceCookieServiceImpl extends ServiceImpl<DataSourceCookieMap
         if (StringUtils.isBlank(dataSourceKey)) {
             return "";
         }
-        String cacheKey = RedisKey.getKey(RedisKey.DATASOURCE_COOKIE_CACHE_KEY, dataSourceKey);
-        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cached != null) {
-            return cached;
-        }
 
         String cookie = loadEnabledCookieFromDb(dataSourceKey);
         if (StringUtils.isBlank(cookie)
@@ -73,7 +68,6 @@ public class DataSourceCookieServiceImpl extends ServiceImpl<DataSourceCookieMap
             cookie = "";
         }
 
-        stringRedisTemplate.opsForValue().set(cacheKey, cookie, CACHE_HOURS, TimeUnit.HOURS);
         return cookie;
     }
 

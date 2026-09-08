@@ -56,7 +56,7 @@ public class QQMusicDataSource implements DataSource {
         }
 
         return HotPost.builder()
-                .sort(CategoryTypeEnum.MUSIC_HOT.getValue())
+                .sort(CategoryTypeEnum.MUSIC_HOT.getSort())
                 .category(CategoryTypeEnum.MUSIC_HOT.getValue())
                 .name("QQ音乐热歌榜")
                 .updateInterval(UpdateIntervalEnum.TWO_HOUR.getValue())

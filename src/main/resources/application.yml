@@ -124,6 +124,10 @@ minio:
 
 # 热榜数据源相关配置（按需配置）
 fishisland:
+  index-trade:
+    # 指数买入风控：均为积分数，可通过环境配置覆盖
+    max-single-buy-amount: 100000
+    max-daily-buy-amount: 500000
   koishi:
     ws-url: ws://127.0.0.1:5140/status
     # 摸鱼助手 Token 优先从数据源 Cookie 表（dataSourceKey=Koishi）读取，此处仅作兜底
@@ -136,8 +140,8 @@ fishisland:
     reconnect-delay-seconds: 3
   pet:
     forge:
-      # 数值计算是否计入项链(5)、翅膀(6)的锻造等级与词条；暂无实体装备时建议 false
-      include-necklace-wings-stats: false
+      # 数值计算是否计入项链(7)、翅膀(8)的锻造等级与词条；暂无实体装备时建议 false
+      include-necklace-wings-stats: true
   tournament:
     # 武道大会每日排行结算总积分池（按排名百分比分配，规则同 Boss）
     reward-points: 400

@@ -23,10 +23,12 @@ import com.cong.fishisland.model.ws.request.MessageWrapper;
 import com.cong.fishisland.model.ws.request.Sender;
 import com.cong.fishisland.model.ws.response.WSBaseResp;
 import com.cong.fishisland.model.enums.MessageTypeEnum;
+import com.cong.fishisland.model.enums.user.PointsRecordSourceEnum;
 import com.cong.fishisland.service.DonationDetailRecordsService;
 import com.cong.fishisland.service.DonationRecordsService;
 import com.cong.fishisland.service.EventRemindService;
 import com.cong.fishisland.service.RoomMessageService;
+import com.cong.fishisland.service.UserPointsService;
 import com.cong.fishisland.service.UserTitleService;
 import com.cong.fishisland.service.UserVipService;
 import com.cong.fishisland.websocket.service.WebSocketService;
@@ -45,6 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -91,6 +94,9 @@ public class PayOrderServiceImpl extends ServiceImpl<PayOrderMapper, PayOrder>
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private UserPointsService userPointsService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -269,11 +275,13 @@ public class PayOrderServiceImpl extends ServiceImpl<PayOrderMapper, PayOrder>
      * 处理赞助摸鱼岛业务
      * <p>
      * 1. 更新打赏榜记录（累加金额）
-     * 2. 本次金额 >= 1 元时派发赞助者称号（ID = 1）
-     * 3. 查询累计打赏金额
-     * 4. 累计金额 >= 29.9 元时自动派发永久 VIP、专属称号「闪耀永恒岛民」（ID = 31），并发送系统通知
-     * 5. 累计金额 >= 100 元时发送通知，提示联系岛主定制专属称号（只发一次）
-     * 6. 向聊天室广播感谢消息
+     * 2. 插入打赏明细
+     * 3. 按金额发放可用积分（每赞助 1 元 +10 可用积分）
+     * 4. 本次金额 >= 1 元时派发赞助者称号（ID = 1）
+     * 5. 查询累计打赏金额
+     * 6. 累计金额 >= 29.9 元时自动派发永久 VIP、专属称号「闪耀永恒岛民」（ID = 31），并发送系统通知
+     * 7. 累计金额 >= 100 元时发送通知，提示联系岛主定制专属称号（只发一次）
+     * 8. 向聊天室广播感谢消息
      *
      * @param userId   赞助用户 ID
      * @param totalFee 本次赞助金额（元）
@@ -300,7 +308,34 @@ public class PayOrderServiceImpl extends ServiceImpl<PayOrderMapper, PayOrder>
             log.error("[XunhuPay] 打赏明细记录失败，userId={}, amount={}", userId, totalFee, e);
         }
 
-        // 3. 本次金额 >= 1 元时派发赞助者称号（ID = 1），已拥有则跳过
+        // 3. 按赞助金额发放可用积分：每 1 元 +10 可用积分（向下取整）
+        if (totalFee != null && totalFee.compareTo(BigDecimal.ZERO) > 0) {
+            int rewardPoints = totalFee.multiply(BigDecimal.TEN)
+                    .setScale(0, RoundingMode.DOWN)
+                    .intValue();
+            if (rewardPoints > 0) {
+                try {
+                    // 发放可用积分（通过减少 usedPoints 实现，与兑换码等奖励一致）
+                    userPointsService.updateUsedPoints(userId, -rewardPoints,
+                            PointsRecordSourceEnum.SPONSOR.getValue(),
+                            null,
+                            String.format("赞助摸鱼岛 %.2f 元奖励 %d 积分", totalFee, rewardPoints));
+                    log.info("[XunhuPay] 赞助积分发放成功，userId={}, amount={}, points={}",
+                            userId, totalFee, rewardPoints);
+
+                    String pointsNotify = String.format(
+                            "感谢您赞助摸鱼岛 %.2f 元，已为您发放 %d 可用积分，感谢支持！",
+                            totalFee, rewardPoints);
+                    eventRemindService.sendSystemNotify(userId, pointsNotify);
+                    log.info("[XunhuPay] 赞助积分系统通知已发送，userId={}, points={}", userId, rewardPoints);
+                } catch (Exception e) {
+                    log.error("[XunhuPay] 赞助积分发放失败，userId={}, amount={}, points={}",
+                            userId, totalFee, rewardPoints, e);
+                }
+            }
+        }
+
+        // 4. 本次金额 >= 1 元时派发赞助者称号（ID = 1），已拥有则跳过
         if (totalFee != null && totalFee.compareTo(BigDecimal.ONE) >= 0) {
             try {
                 boolean granted = userTitleService.addTitleToUser(userId, TitleConstant.SPONSOR_TITLE_ID);
@@ -314,7 +349,7 @@ public class PayOrderServiceImpl extends ServiceImpl<PayOrderMapper, PayOrder>
             }
         }
 
-        // 4. 查询累计打赏金额，用于后续多个阈值判断
+        // 5. 查询累计打赏金额，用于后续多个阈值判断
         BigDecimal totalAmount = BigDecimal.ZERO;
         try {
             DonationRecords record =
@@ -326,7 +361,7 @@ public class PayOrderServiceImpl extends ServiceImpl<PayOrderMapper, PayOrder>
             log.error("[XunhuPay] 查询累计打赏金额失败，userId={}", userId, e);
         }
 
-        // 5. 累计打赏金额 >= 29.9 元时派发永久 VIP 与专属称号「闪耀永恒岛民」
+        // 6. 累计打赏金额 >= 29.9 元时派发永久 VIP 与专属称号「闪耀永恒岛民」
         BigDecimal permanentVipThreshold = new BigDecimal("29.9");
         if (totalAmount.compareTo(permanentVipThreshold) >= 0) {
             boolean wasPermanentVip = userVipService.isPermanentVip(userId);
@@ -367,7 +402,7 @@ public class PayOrderServiceImpl extends ServiceImpl<PayOrderMapper, PayOrder>
             }
         }
 
-        // 6. 累计打赏金额 >= 100 元时，通知用户联系岛主定制称号（只发一次）
+        // 7. 累计打赏金额 >= 100 元时，通知用户联系岛主定制称号（只发一次）
         try {
             BigDecimal customTitleThreshold = new BigDecimal("100");
             if (totalAmount.compareTo(customTitleThreshold) >= 0) {
@@ -387,7 +422,7 @@ public class PayOrderServiceImpl extends ServiceImpl<PayOrderMapper, PayOrder>
             log.error("[XunhuPay] 定制称号通知发送失败，userId={}", userId, e);
         }
 
-        // 7. 向聊天室广播感谢消息
+        // 8. 向聊天室广播感谢消息
         try {
             sendSponsorChatMessage(userId, totalFee, remark);
         } catch (Exception e) {

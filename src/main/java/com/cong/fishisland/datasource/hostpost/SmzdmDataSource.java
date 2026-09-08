@@ -67,7 +67,7 @@ public class SmzdmDataSource implements DataSource {
         }
 
         return HotPost.builder()
-                .sort(CategoryTypeEnum.GOODS_SHARE.getValue())
+                .sort(CategoryTypeEnum.GOODS_SHARE.getSort())
                 .name("什么值得买热榜")
                 .category(CategoryTypeEnum.GOODS_SHARE.getValue())
                 .updateInterval(UpdateIntervalEnum.TWO_HOUR.getValue())

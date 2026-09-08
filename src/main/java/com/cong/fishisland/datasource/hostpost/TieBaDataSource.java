@@ -38,7 +38,7 @@ public class TieBaDataSource implements DataSource{
                 .collect(Collectors.toList());
 
         return HotPost.builder()
-                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
+                .sort(CategoryTypeEnum.GENERAL_DISCUSSION.getSort())
                 .name("百度贴吧热榜")
                 .category(CategoryTypeEnum.GENERAL_DISCUSSION.getValue())
                 .updateInterval(UpdateIntervalEnum.HALF_HOUR.getValue())
