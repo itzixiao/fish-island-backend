@@ -1072,14 +1072,28 @@ public class LandlordsGameService implements GameService {
             List<String> playCards = robotService.getPlayCards(room, playerId);
             if (playCards.isEmpty()) {
                 passInternal(room, playerId);
-            } else {
+                return;
+            }
+            log.info("AI托管出牌: playerId={}, cards={}", playerId, playCards);
+            try {
                 playCardsInternal(room, playerId, playCards);
+            } catch (GameBusinessException e) {
+                // AI 选牌异常（如解析失败/牌型不合法）→ 退化为不出
+                log.warn("AI托管出牌被校验驳回, 改为不出: playerId={}, cards={}, err={}",
+                        playerId, playCards, e.getMessage());
+                passInternal(room, playerId);
             }
         } else {
             PokerSorter.sortByLandlords(hand);
             Poker smallestCard = hand.getAll().get(hand.getAll().size() - 1);
             String cardId = smallestCard.getId();
-            playCardsInternal(room, playerId, Collections.singletonList(cardId));
+            log.info("AI托管出最小牌: playerId={}, card={}", playerId, cardId);
+            try {
+                playCardsInternal(room, playerId, Collections.singletonList(cardId));
+            } catch (GameBusinessException e) {
+                log.error("AI首出最小牌异常: playerId={}, card={}, err={}",
+                        playerId, cardId, e.getMessage());
+            }
         }
     }
 

@@ -5,13 +5,19 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.cong.fishisland.common.ErrorCode;
 import com.cong.fishisland.common.exception.BusinessException;
 import com.cong.fishisland.common.exception.ThrowUtils;
+import com.cong.fishisland.constant.TitleConstant;
 import com.cong.fishisland.mapper.auth.FishAuthCodeMapper;
 import com.cong.fishisland.model.entity.auth.FishAuth;
 import com.cong.fishisland.model.entity.auth.FishAuthCode;
+import com.cong.fishisland.model.entity.donation.DonationRecords;
 import com.cong.fishisland.model.entity.user.User;
+import com.cong.fishisland.model.entity.user.UserTitle;
 import com.cong.fishisland.model.vo.auth.OAuth2TokenVO;
 import com.cong.fishisland.model.vo.auth.OAuth2UserInfoVO;
+import com.cong.fishisland.service.DonationRecordsService;
 import com.cong.fishisland.service.UserService;
+import com.cong.fishisland.service.UserTitleService;
+import com.cong.fishisland.service.UserVipService;
 import com.cong.fishisland.service.auth.FishAuthService;
 import com.cong.fishisland.service.auth.OAuth2Service;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.UUID;
@@ -49,6 +56,9 @@ public class OAuth2ServiceImpl implements OAuth2Service {
     private final FishAuthService fishAuthService;
     private final FishAuthCodeMapper fishAuthCodeMapper;
     private final UserService userService;
+    private final UserTitleService userTitleService;
+    private final UserVipService userVipService;
+    private final DonationRecordsService donationRecordsService;
     private final StringRedisTemplate stringRedisTemplate;
 
     @Override
@@ -138,10 +148,30 @@ public class OAuth2ServiceImpl implements OAuth2Service {
         vo.setUsername(user.getUserAccount());
         vo.setName(user.getUserName());
         vo.setAvatar(user.getUserAvatar());
+        vo.setIsPermanentVip(userVipService.isPermanentVip(userId));
+
+        DonationRecords donationRecords = donationRecordsService.getOne(
+                new LambdaQueryWrapper<DonationRecords>()
+                        .eq(DonationRecords::getUserId, userId));
+        vo.setDonationAmount(donationRecords == null || donationRecords.getAmount() == null
+                ? BigDecimal.ZERO
+                : donationRecords.getAmount());
+        vo.setCurrentTitleName(getCurrentTitleName(user.getTitleId()));
         return vo;
     }
 
     // ---- 私有方法 ----
+
+    private String getCurrentTitleName(Long titleId) {
+        if (titleId == null || TitleConstant.DEFAULT_TITLE_ID.equals(titleId)) {
+            return "";
+        }
+        if (TitleConstant.ADMIN_TITLE_ID.equals(titleId)) {
+            return "摸鱼监督员";
+        }
+        UserTitle userTitle = userTitleService.getById(titleId);
+        return userTitle == null || userTitle.getName() == null ? "" : userTitle.getName();
+    }
 
     private FishAuth getEnabledApp(String clientId) {
         FishAuth app = fishAuthService.getOne(new LambdaQueryWrapper<FishAuth>()

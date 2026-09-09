@@ -224,6 +224,15 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
                         GameMessageTypeEnum.STATE_UPDATE.getType(), stateUpdateData);
             }
 
+            // 广播玩家上线状态，让其他玩家看到头像恢复彩色
+            Map<String, Object> onlineStatusData = new HashMap<>();
+            onlineStatusData.put("event", GameActionEnum.PLAYER_STATUS_CHANGE.getCode());
+            onlineStatusData.put("userId", userId);
+            onlineStatusData.put("status", "online");
+
+            sessionManager.broadcastToRoomExcept(userId, landlordsRoom.getPlayerOrder(),
+                    GameMessageTypeEnum.STATE_UPDATE.getType(), onlineStatusData);
+
             // 添加重连信息
             roomState.setAction("RECONNECT");
         } else {
@@ -259,11 +268,31 @@ public class LandlordsGameMessageHandler implements GameMessageHandler {
                 // 设置 AI 托管（内部会广播状态变更）
                 gameService.setRobotControl(landlordsRoom, userId, RobotReasonEnum.LEAVE);
 
+                // 关键：把退出玩家的在线状态置为 false，确保房间列表中头像置灰
+                // 同时避免房间被认为"还有在线玩家"导致房间不被清理
+                if (player != null) {
+                    player.setOnline(false);
+                }
+
                 GameSession session = roomManager.getUserSession(userId);
                 if (session != null) {
                     session.setTempLeave(landlordsRoom.getRoomId());
+                    session.markOffline();
                     roomManager.saveSession(session);
                 }
+
+                // 广播玩家离线状态变更（游戏中退出，其他玩家看到头像置灰）
+                // 注意：使用 broadcastToRoom 让退出者本人也能收到，
+                // 这样他回到房间列表时头像会同步置灰
+                Map<String, Object> stateUpdateData = new HashMap<>();
+                stateUpdateData.put("event", GameActionEnum.PLAYER_STATUS_CHANGE.getCode());
+                stateUpdateData.put("userId", userId);
+                stateUpdateData.put("status", "offline");
+                stateUpdateData.put("playerName", playerName);
+                sessionManager.broadcastToRoom(landlordsRoom.getPlayerOrder(),
+                        GameMessageTypeEnum.STATE_UPDATE.getType(), stateUpdateData);
+
+                roomManager.saveRoom(landlordsRoom);
 
                 if (landlordsRoom.getOnlinePlayerCount() == 0) {
                     log.info("所有玩家都已离线，强制结束游戏并关闭房间: roomId={}", landlordsRoom.getRoomId());

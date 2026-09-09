@@ -26,6 +26,7 @@ import io.swagger.annotations.ApiOperation;
 import lombok.extern.slf4j.Slf4j;
 import me.zhyd.oauth.model.AuthCallback;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.validator.routines.EmailValidator;
 import org.springframework.beans.BeanUtils;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -54,6 +55,8 @@ import static com.cong.fishisland.constant.SystemConstants.SALT;
 @Slf4j
 //@Api(tags = "用户相关")
 public class UserController {
+
+    private static final EmailValidator EMAIL_VALIDATOR = EmailValidator.getInstance(true);
 
     @Resource
     private UserService userService;
@@ -147,7 +150,9 @@ public class UserController {
         if (StringUtils.isAnyBlank(userAccount, userPassword)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
-        LoginUserVO loginUserVO = userService.userLogin(userAccount, userPassword);
+        LoginUserVO loginUserVO = EMAIL_VALIDATOR.isValid(userAccount)
+                ? userService.userEmailLogin(userAccount, userPassword)
+                : userService.userLogin(userAccount, userPassword);
         return ResultUtils.success(loginUserVO);
     }
 

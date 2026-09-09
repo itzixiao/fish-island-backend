@@ -5,6 +5,7 @@ import io.swagger.annotations.ApiModelProperty;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 
 /**
  * OAuth2 用户信息响应
@@ -26,6 +27,15 @@ public class OAuth2UserInfoVO implements Serializable {
 
     @ApiModelProperty(value = "用户头像")
     private String avatar;
+
+    @ApiModelProperty(value = "是否为永久会员")
+    private Boolean isPermanentVip;
+
+    @ApiModelProperty(value = "累计赞助金额（元）")
+    private BigDecimal donationAmount;
+
+    @ApiModelProperty(value = "当前穿戴的称号名称，未穿戴时为空字符串")
+    private String currentTitleName;
 
 
     private static final long serialVersionUID = 1L;
