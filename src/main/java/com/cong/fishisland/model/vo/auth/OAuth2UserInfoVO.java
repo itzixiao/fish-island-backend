@@ -34,6 +34,9 @@ public class OAuth2UserInfoVO implements Serializable {
     @ApiModelProperty(value = "累计赞助金额（元）")
     private BigDecimal donationAmount;
 
+    @ApiModelProperty(value = "当前穿戴的称号名称，未穿戴时为空字符串")
+    private String currentTitleName;
+
 
     private static final long serialVersionUID = 1L;
 }
