@@ -10,6 +10,11 @@ import com.cong.fishisland.mapper.farm.FarmCropMapper;
 import com.cong.fishisland.mapper.farm.FarmLandMapper;
 import com.cong.fishisland.mapper.farm.FarmPlantRecordMapper;
 import com.cong.fishisland.model.dto.farm.LandDTO;
+import com.cong.fishisland.model.dto.farm.WaterLandResult;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import com.cong.fishisland.model.dto.farm.PlantItem;
 import com.cong.fishisland.model.entity.farm.FarmCrop;
 import com.cong.fishisland.model.entity.farm.FarmLand;
@@ -28,13 +33,53 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> implements FarmLandService {
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    @Override
+    public List<WaterLandResult> waterBatch(List<Long> landIds) {
+        if (CollectionUtils.isEmpty(landIds) || landIds.size() > FarmConstants.LAND_TOTAL_COUNT) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "浇水列表不能为空，且单次最多24株");
+        }
+        Set<Long> uniqueIds = new HashSet<>();
+        for (Long landId : landIds) {
+            if (landId == null || landId <= 0 || !uniqueIds.add(landId)) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "地块ID必须为正数且不可重复");
+            }
+        }
+        StpUtil.checkLogin();
+        // 显式事务避免同类调用绕过 waterLand 上的事务代理；单株失败只回滚该株。
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        List<WaterLandResult> results = new ArrayList<>(landIds.size());
+        for (Long landId : landIds) {
+            WaterLandResult result = new WaterLandResult();
+            result.setLandId(landId);
+            try {
+                LandDTO land = transaction.execute(status -> toDTO(waterLand(landId)));
+                result.setSuccess(true);
+                result.setLand(land);
+                result.setMessage("浇水成功");
+            } catch (BusinessException e) {
+                result.setMessage(e.getMessage());
+            } catch (RuntimeException e) {
+                log.error("批量浇水失败，landId={}", landId, e);
+                result.setMessage("浇水失败，请稍后刷新重试");
+            }
+            results.add(result);
+        }
+        return results;
+    }
 
     @Autowired
     private FarmCropMapper cropMapper;
@@ -174,6 +219,56 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public FarmLand waterLand(Long landId) {
+        if (landId == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "地块ID不能为空");
+        }
+        long userId = StpUtil.getLoginIdAsLong();
+        FarmLand land = getById(landId);
+        if (land == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "地块不存在");
+        }
+        if (!Objects.equals(land.getUserId(), userId)) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权操作该地块");
+        }
+        if (!FarmYesNoEnum.isNo(land.getLocked())) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "地块未解锁，无法浇水");
+        }
+        // 与数据库 datetime 的秒精度保持一致，避免冷却时间和返回值产生偏差。
+        LocalDateTime now = LocalDateTime.now().withNano(0);
+        if (!Integer.valueOf(FarmLandStatusEnum.PLANTING.getValue()).equals(land.getStatus())
+                || land.getPlantedCropId() == null || land.getHarvestTime() == null
+                || !land.getHarvestTime().isAfter(now)) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "仅可给未成熟的作物浇水");
+        }
+        LocalDateTime cooldownBefore = now.minusMinutes(FarmConstants.WATER_COOLDOWN_MINUTES);
+        int dailyWaterCount = getDailyWaterCount(land, now);
+        if (dailyWaterCount >= FarmConstants.WATER_DAILY_LIMIT) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "每株作物每天最多浇水" + FarmConstants.WATER_DAILY_LIMIT + "次，请明天再来");
+        }
+        if (land.getLastWateredTime() != null && land.getLastWateredTime().isAfter(cooldownBefore)) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "浇水冷却中，每30分钟可浇水一次");
+        }
+        LocalDateTime oldHarvestTime = land.getHarvestTime();
+        long remainingSeconds = Duration.between(now, oldHarvestTime).getSeconds();
+        long reductionSeconds = (remainingSeconds * FarmConstants.WATER_REDUCTION_PERCENT + 99) / 100;
+        LocalDateTime harvestTime = oldHarvestTime.minusSeconds(reductionSeconds);
+        if (baseMapper.waterIfAllowed(land, harvestTime, now, cooldownBefore) != 1) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "地块状态已变化或浇水冷却中，请刷新后重试");
+        }
+        if (plantRecordMapper.updateHarvestTimeAfterWatering(landId, oldHarvestTime, harvestTime) != 1) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "种植记录状态已变化，无法浇水");
+        }
+        land.setHarvestTime(harvestTime);
+        land.setLastWateredTime(now);
+        land.setDailyWaterCount(dailyWaterCount + 1);
+        land.setUpdateTime(now);
+        return land;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public List<FarmLand> plantBatch(List<PlantItem> items) {
         if (CollectionUtils.isEmpty(items)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "种植列表不能为空");
@@ -265,6 +360,8 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
                     .set(FarmLand::getPlantedCropId, cropId)
                     .set(FarmLand::getPlantedTime, now)
                     .set(FarmLand::getHarvestTime, harvestTime)
+                    .set(FarmLand::getLastWateredTime, null)
+                    .set(FarmLand::getDailyWaterCount, 0)
                     .set(FarmLand::getUpdateTime, now)
                     .update();
             if (!updated) {
@@ -275,6 +372,8 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
             land.setPlantedCropId(cropId);
             land.setPlantedTime(now);
             land.setHarvestTime(harvestTime);
+            land.setLastWateredTime(null);
+            land.setDailyWaterCount(0);
             land.setUpdateTime(now);
             updatedLands.add(land);
 
@@ -379,6 +478,8 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
                     .set(FarmLand::getPlantedCropId, null)
                     .set(FarmLand::getPlantedTime, null)
                     .set(FarmLand::getHarvestTime, null)
+                    .set(FarmLand::getLastWateredTime, null)
+                    .set(FarmLand::getDailyWaterCount, 0)
                     .set(FarmLand::getUpdateTime, now)
                     .update();
             if (!landUpdated) {
@@ -407,6 +508,8 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
             land.setPlantedCropId(null);
             land.setPlantedTime(null);
             land.setHarvestTime(null);
+            land.setLastWateredTime(null);
+            land.setDailyWaterCount(0);
             land.setUpdateTime(now);
             updatedLands.add(land);
         }
@@ -448,6 +551,18 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
         dto.setPlantedCropId(land.getPlantedCropId());
         dto.setPlantedTime(land.getPlantedTime());
         dto.setHarvestTime(land.getHarvestTime());
+        dto.setLastWateredTime(land.getLastWateredTime());
+        LocalDateTime now = LocalDateTime.now();
+        int dailyWaterCount = getDailyWaterCount(land, now);
+        dto.setDailyWaterCount(dailyWaterCount);
+        if (Integer.valueOf(FarmLandStatusEnum.PLANTING.getValue()).equals(dto.getStatus())
+                && FarmYesNoEnum.isNo(land.getLocked()) && land.getLastWateredTime() != null) {
+            dto.setNextWaterTime(land.getLastWateredTime().plusMinutes(FarmConstants.WATER_COOLDOWN_MINUTES));
+            LocalDateTime tomorrow = now.toLocalDate().plusDays(1).atStartOfDay();
+            if (dailyWaterCount >= FarmConstants.WATER_DAILY_LIMIT && dto.getNextWaterTime().isBefore(tomorrow)) {
+                dto.setNextWaterTime(tomorrow);
+            }
+        }
         dto.setLocked(land.getLocked());
         if (land.getLandIndex() != null && FarmConstants.isLevelUnlockableLandIndex(land.getLandIndex())) {
             dto.setUnlockLevel(FarmConstants.unlockLevelForLandIndex(land.getLandIndex()));
@@ -461,6 +576,12 @@ public class FarmLandServiceImpl extends ServiceImpl<FarmLandMapper, FarmLand> i
             }
         }
         return dto;
+    }
+
+    private int getDailyWaterCount(FarmLand land, LocalDateTime now) {
+        return land.getLastWateredTime() != null
+                && land.getLastWateredTime().toLocalDate().equals(now.toLocalDate())
+                && land.getDailyWaterCount() != null ? land.getDailyWaterCount() : 0;
     }
 
     @Override

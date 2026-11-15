@@ -1,6 +1,7 @@
 package com.cong.fishisland.service;
 
 import com.cong.fishisland.model.dto.farm.LandDTO;
+import com.cong.fishisland.model.dto.farm.WaterLandResult;
 import com.cong.fishisland.model.dto.farm.PlantItem;
 import com.cong.fishisland.model.entity.farm.FarmLand;
 
@@ -36,6 +37,15 @@ public interface FarmLandService {
      * @return 解锁后的地块
      */
     FarmLand unlockLand(Long landId);
+
+    /**
+     * 给自己的未成熟作物浇水，缩短剩余成熟时间的 2%（向上取整到秒）。
+     * 首次可立即浇水，同一轮种植每 30 分钟可浇水一次，每株每天最多 10 次。
+     */
+    FarmLand waterLand(Long landId);
+
+    /** 批量浇水，每株独立事务，按请求顺序返回处理结果。 */
+    List<WaterLandResult> waterBatch(List<Long> landIds);
 
     /**
      * 批量在指定地块种植作物，扣减种子积分并创建种植记录。
